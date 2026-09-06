@@ -4,7 +4,7 @@ Organization-based time tracking, built as a portfolio project.
 
 ## Prerequisites
 
-- Go 1.22+
+- Go 1.25+
 - Node.js 20+ and pnpm
 - Docker with Docker Compose
 

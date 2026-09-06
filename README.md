@@ -11,7 +11,7 @@ Organization-based time tracking, built as a portfolio project.
 ## Run locally
 
 1. Copy `.env.example` to `.env`.
-2. Start PostgreSQL: `docker compose -f deploy/compose/compose.yaml up -d postgres`.
+2. Start PostgreSQL and local email capture: `docker compose -f deploy/compose/compose.yaml up -d`.
 3. From `apps/api`, apply migrations:
 
    ```sh
@@ -23,6 +23,9 @@ Organization-based time tracking, built as a portfolio project.
 5. In `apps/web`, run `pnpm install` then `pnpm dev`.
 
 Health endpoints: `http://localhost:8080/health/live` and `http://localhost:8080/health/ready`.
+For local verification and password-reset messages, open Mailpit at `http://localhost:8025`.
+
+Production deployments must use HTTPS and set `COOKIE_SECURE=true`.
 
 ## Layout
 

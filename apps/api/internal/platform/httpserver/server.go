@@ -7,15 +7,29 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/fortune-tech/time-tracker/apps/api/internal/auth"
+	"github.com/fortune-tech/time-tracker/apps/api/internal/organizations"
+	platformemail "github.com/fortune-tech/time-tracker/apps/api/internal/platform/email"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func New(database *pgxpool.Pool, logger *slog.Logger) http.Handler {
+func New(database *pgxpool.Pool, logger *slog.Logger, sender platformemail.Sender, webBaseURL string, cookieSecure bool) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", live)
 	mux.HandleFunc("GET /health/ready", ready(database))
 	mux.HandleFunc("GET /api/v1", apiRoot)
+	mux.Handle("POST /api/v1/auth/register", auth.RegisterHandler{Database: database, Email: sender, WebBaseURL: webBaseURL})
+	mux.Handle("POST /api/v1/auth/verify-email", auth.VerifyEmailHandler{Database: database})
+	mux.Handle("POST /api/v1/auth/login", auth.LoginHandler{Database: database, CookieSecure: cookieSecure})
+	mux.Handle("POST /api/v1/auth/logout", auth.LogoutHandler{Database: database, CookieSecure: cookieSecure})
+	mux.Handle("GET /api/v1/auth/me", auth.MeHandler{Database: database})
+	mux.Handle("PATCH /api/v1/profile", auth.ProfileHandler{Database: database})
+	mux.Handle("POST /api/v1/auth/password-reset/request", auth.PasswordResetRequestHandler{Database: database, Email: sender, WebBaseURL: webBaseURL})
+	mux.Handle("POST /api/v1/auth/password-reset/confirm", auth.PasswordResetConfirmHandler{Database: database})
+	mux.Handle("POST /api/v1/auth/resend-verification", auth.ResendVerificationHandler{Database: database, Email: sender, WebBaseURL: webBaseURL})
+	mux.Handle("POST /api/v1/organizations", organizations.CreateHandler{Database: database})
+	mux.Handle("GET /api/v1/organizations", organizations.ListHandler{Database: database})
 	return withRequestLogging(logger, mux)
 }
 

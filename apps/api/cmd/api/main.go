@@ -12,6 +12,7 @@ import (
 
 	"github.com/fortune-tech/time-tracker/apps/api/internal/platform/config"
 	"github.com/fortune-tech/time-tracker/apps/api/internal/platform/database"
+	platformemail "github.com/fortune-tech/time-tracker/apps/api/internal/platform/email"
 	"github.com/fortune-tech/time-tracker/apps/api/internal/platform/httpserver"
 )
 
@@ -30,7 +31,8 @@ func main() {
 	}
 	defer db.Close()
 
-	server := &http.Server{Addr: cfg.APIAddress, Handler: httpserver.New(db, logger), ReadHeaderTimeout: 5 * time.Second}
+	sender := platformemail.SMTP{Address: cfg.SMTPAddress, From: cfg.EmailFrom}
+	server := &http.Server{Addr: cfg.APIAddress, Handler: httpserver.New(db, logger, sender, cfg.WebBaseURL, cfg.CookieSecure), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		logger.Info("api started", "address", cfg.APIAddress)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

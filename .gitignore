@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+coverage/
+*.exe
+*.test
+*.out
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

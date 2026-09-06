@@ -1,0 +1,1 @@
+-- Intentionally empty baseline migration. Phase 1 introduces application tables.

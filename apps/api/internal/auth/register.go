@@ -125,6 +125,12 @@ func tokenHash(token string) string {
 	hash := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(hash[:])
 }
+
+// NewActionToken returns an opaque token suitable for one-time email actions.
+func NewActionToken() (string, error) { return randomToken() }
+
+// HashActionToken returns the database-safe representation of an action token.
+func HashActionToken(token string) string { return tokenHash(token) }
 func writeError(writer http.ResponseWriter, status int, code, message string) {
 	writeJSON(writer, status, map[string]any{"data": nil, "error": map[string]string{"code": code, "message": message}, "meta": map[string]any{}})
 }

@@ -31,7 +31,16 @@ func main() {
 	}
 	defer db.Close()
 
-	sender := platformemail.SMTP{Address: cfg.SMTPAddress, From: cfg.EmailFrom}
+	var sender platformemail.Sender
+	if cfg.EmailProvider == "ses" {
+		sender, err = platformemail.NewSES(context.Background(), cfg.AWSRegion, cfg.EmailFrom)
+		if err != nil {
+			logger.Error("SES sender initialization failed", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		sender = platformemail.SMTP{Address: cfg.SMTPAddress, From: cfg.EmailFrom}
+	}
 	server := &http.Server{Addr: cfg.APIAddress, Handler: httpserver.New(db, logger, sender, cfg.WebBaseURL, cfg.CookieSecure), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		logger.Info("api started", "address", cfg.APIAddress)

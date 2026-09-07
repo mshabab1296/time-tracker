@@ -1,0 +1,10 @@
+DROP TABLE audit_logs;
+DROP INDEX invitations_email_status_idx;
+DROP INDEX invitations_pending_organization_email_unique_idx;
+DROP TABLE invitations;
+DROP INDEX tags_organization_name_unique_idx;
+DROP TABLE tags;
+DROP INDEX project_assignments_user_id_idx;
+DROP TABLE project_assignments;
+DROP INDEX projects_organization_name_unique_idx;
+DROP TABLE projects;

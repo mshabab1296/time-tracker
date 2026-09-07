@@ -1,6 +1,6 @@
 # TimeTracker
 
-Organization-based time tracking, built as a portfolio project.
+Organization-based time tracking for teams: projects, tags, timers, and timesheet reporting.
 
 ## Prerequisites
 

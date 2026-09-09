@@ -10,6 +10,7 @@ import (
 	"github.com/fortune-tech/time-tracker/apps/api/internal/auth"
 	"github.com/fortune-tech/time-tracker/apps/api/internal/organizations"
 	platformemail "github.com/fortune-tech/time-tracker/apps/api/internal/platform/email"
+	"github.com/fortune-tech/time-tracker/apps/api/internal/timetracking"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -49,6 +50,12 @@ func New(database *pgxpool.Pool, logger *slog.Logger, sender platformemail.Sende
 	mux.Handle("DELETE /api/v1/organizations/{organizationID}/invitations/{invitationID}", organizations.InvitationCancelHandler{Database: database})
 	mux.Handle("GET /api/v1/invitations", organizations.InvitationListHandler{Database: database})
 	mux.Handle("POST /api/v1/invitations/{invitationID}/{decision}", organizations.InvitationDecisionHandler{Database: database})
+	mux.HandleFunc("POST /api/v1/timer/start", timetracking.Handler{Database: database}.Start)
+	mux.HandleFunc("POST /api/v1/timer/pause", timetracking.Handler{Database: database}.Pause)
+	mux.HandleFunc("POST /api/v1/timer/resume", timetracking.Handler{Database: database}.Resume)
+	mux.HandleFunc("POST /api/v1/timer/stop", timetracking.Handler{Database: database}.Stop)
+	mux.HandleFunc("PATCH /api/v1/timer/active", timetracking.Handler{Database: database}.UpdateActive)
+	mux.HandleFunc("GET /api/v1/timer/active", timetracking.Handler{Database: database}.Active)
 	return withRequestLogging(logger, mux)
 }
 

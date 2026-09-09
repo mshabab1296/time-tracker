@@ -93,6 +93,10 @@ func (handler RemoveMemberHandler) ServeHTTP(writer http.ResponseWriter, request
 	if !ok {
 		return
 	}
+	if userHasActiveTimer(request, handler.Database, organizationID, memberID) {
+		respondError(writer, http.StatusConflict, "MEMBER_HAS_ACTIVE_TIMER", "Stop the member's active timer before removing them.")
+		return
+	}
 	command, err := handler.Database.Exec(request.Context(), `DELETE FROM memberships WHERE organization_id = $1 AND user_id = $2 AND role = 'MEMBER'`, organizationID, memberID)
 	if err != nil {
 		respondError(writer, 500, "INTERNAL_ERROR", "Unable to remove member.")
@@ -224,6 +228,10 @@ func (handler ProjectHandler) delete(writer http.ResponseWriter, request *http.R
 		return
 	}
 	command, err := handler.Database.Exec(request.Context(), `DELETE FROM projects WHERE id = $1 AND organization_id = $2`, projectID, organizationID)
+	if foreignKeyViolation(err) {
+		respondError(writer, http.StatusConflict, "PROJECT_IN_USE", "A project with time entries cannot be deleted.")
+		return
+	}
 	if err != nil {
 		respondError(writer, 500, "INTERNAL_ERROR", "Unable to delete project.")
 		return
@@ -266,6 +274,10 @@ func (handler AssignmentHandler) ServeHTTP(writer http.ResponseWriter, request *
 		}
 		audit(request, handler.Database, organizationID, actorID, "PROJECT_ASSIGNED", "PROJECT", projectID)
 		respond(writer, http.StatusCreated, map[string]bool{"assigned": true})
+		return
+	}
+	if userHasActiveTimerForProject(request, handler.Database, organizationID, userID, projectID) {
+		respondError(writer, http.StatusConflict, "ASSIGNMENT_HAS_ACTIVE_TIMER", "Stop the member's active timer for this project before removing the assignment.")
 		return
 	}
 	command, err := handler.Database.Exec(request.Context(), `DELETE FROM project_assignments pa USING projects p WHERE pa.project_id = p.id AND pa.project_id = $1 AND pa.user_id = $2 AND p.organization_id = $3`, projectID, userID, organizationID)
@@ -388,6 +400,10 @@ func (handler TagHandler) delete(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	command, err := handler.Database.Exec(request.Context(), `DELETE FROM tags WHERE id = $1 AND organization_id = $2`, tagID, organizationID)
+	if foreignKeyViolation(err) {
+		respondError(writer, http.StatusConflict, "TAG_IN_USE", "A tag with time entries cannot be deleted.")
+		return
+	}
 	if err != nil {
 		respondError(writer, 500, "INTERNAL_ERROR", "Unable to delete tag.")
 		return
@@ -473,6 +489,18 @@ func namedInput(writer http.ResponseWriter, request *http.Request, resource stri
 func uniqueViolation(err error) bool {
 	var databaseError *pgconn.PgError
 	return err != nil && errors.As(err, &databaseError) && databaseError.Code == "23505"
+}
+func foreignKeyViolation(err error) bool {
+	var databaseError *pgconn.PgError
+	return err != nil && errors.As(err, &databaseError) && databaseError.Code == "23503"
+}
+func userHasActiveTimer(request *http.Request, database *pgxpool.Pool, organizationID, userID uuid.UUID) bool {
+	var found bool
+	return database.QueryRow(request.Context(), `SELECT EXISTS(SELECT 1 FROM time_entries WHERE organization_id = $1 AND user_id = $2 AND status IN ('RUNNING', 'PAUSED'))`, organizationID, userID).Scan(&found) == nil && found
+}
+func userHasActiveTimerForProject(request *http.Request, database *pgxpool.Pool, organizationID, userID, projectID uuid.UUID) bool {
+	var found bool
+	return database.QueryRow(request.Context(), `SELECT EXISTS(SELECT 1 FROM time_entries WHERE organization_id = $1 AND user_id = $2 AND project_id = $3 AND status IN ('RUNNING', 'PAUSED'))`, organizationID, userID, projectID).Scan(&found) == nil && found
 }
 func audit(request *http.Request, database *pgxpool.Pool, organizationID, actorID uuid.UUID, action, targetType string, targetID uuid.UUID) {
 	id, err := uuid.NewV7()

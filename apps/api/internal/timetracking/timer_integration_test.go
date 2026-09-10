@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -112,6 +113,23 @@ func TestTimerStateFlowAndRetries(t *testing.T) {
 	todayRecorder := invokeAt(t, handler.TodayEntries, http.MethodGet, "/api/v1/time-entries/today?organizationId="+organizationID.String(), "", rawSession, "")
 	if todayRecorder.Code != http.StatusOK || !bytes.Contains(todayRecorder.Body.Bytes(), []byte(`"projectName":"Other"`)) {
 		t.Fatalf("today entries status=%d body=%s", todayRecorder.Code, todayRecorder.Body.String())
+	}
+	manualStartedAt := time.Now().UTC().Add(-3 * time.Hour).Truncate(time.Minute)
+	manualEndedAt := manualStartedAt.Add(90 * time.Minute)
+	manualBody := fmt.Sprintf(`{"organizationId":"%s","projectId":"%s","tagIds":["%s"],"startedAt":"%s","endedAt":"%s"}`, organizationID, projectID, tagID, manualStartedAt.Format(time.RFC3339), manualEndedAt.Format(time.RFC3339))
+	manualRecorder := invoke(t, handler.CreateManual, http.MethodPost, manualBody, rawSession, csrfToken)
+	if manualRecorder.Code != http.StatusCreated {
+		t.Fatalf("manual entry status=%d body=%s", manualRecorder.Code, manualRecorder.Body.String())
+	}
+	durationStartedAt := manualEndedAt.Add(time.Minute)
+	durationBody := fmt.Sprintf(`{"organizationId":"%s","projectId":"%s","tagIds":[],"startedAt":"%s","durationMinutes":30}`, organizationID, projectID, durationStartedAt.Format(time.RFC3339))
+	durationRecorder := invoke(t, handler.CreateManual, http.MethodPost, durationBody, rawSession, csrfToken)
+	if durationRecorder.Code != http.StatusCreated {
+		t.Fatalf("manual duration entry status=%d body=%s", durationRecorder.Code, durationRecorder.Body.String())
+	}
+	overlapBody := fmt.Sprintf(`{"organizationId":"%s","projectId":"%s","tagIds":[],"startedAt":"%s","durationMinutes":30}`, organizationID, projectID, manualStartedAt.Add(time.Minute).Format(time.RFC3339))
+	if overlapRecorder := invoke(t, handler.CreateManual, http.MethodPost, overlapBody, rawSession, csrfToken); overlapRecorder.Code != http.StatusConflict {
+		t.Fatalf("overlapping manual entry status=%d body=%s", overlapRecorder.Code, overlapRecorder.Body.String())
 	}
 	var eventCount int
 	if err := pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM timer_events WHERE time_entry_id = $1`, active.Data.ID).Scan(&eventCount); err != nil || eventCount != 4 {

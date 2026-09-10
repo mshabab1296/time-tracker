@@ -58,6 +58,7 @@ func New(database *pgxpool.Pool, logger *slog.Logger, sender platformemail.Sende
 	mux.HandleFunc("GET /api/v1/timer/active", timetracking.Handler{Database: database}.Active)
 	mux.HandleFunc("GET /api/v1/time-entries/today", timetracking.Handler{Database: database}.TodayEntries)
 	mux.HandleFunc("GET /api/v1/time-entries/week-summary", timetracking.Handler{Database: database}.WeekSummary)
+	mux.HandleFunc("POST /api/v1/time-entries/manual", timetracking.Handler{Database: database}.CreateManual)
 	return withRequestLogging(logger, mux)
 }
 

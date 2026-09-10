@@ -69,6 +69,10 @@ func TestTimerStateFlowAndRetries(t *testing.T) {
 	if active.Data.Status != "RUNNING" || active.Data.ID == uuid.Nil {
 		t.Fatalf("start response was invalid: %#v", active)
 	}
+	refreshed := invokeAt(t, handler.Active, http.MethodGet, "/api/v1/timer?organizationId="+organizationID.String(), "", rawSession, "")
+	if refreshed.Code != http.StatusOK || decodeEntry(t, refreshed).Data.Status != "RUNNING" {
+		t.Fatalf("active timer after refresh status=%d body=%s", refreshed.Code, refreshed.Body.String())
+	}
 	if retry := invoke(t, handler.Start, http.MethodPost, startBody, rawSession, csrfToken); retry.Code != http.StatusOK {
 		t.Fatalf("same start retry status=%d body=%s", retry.Code, retry.Body.String())
 	}

@@ -123,7 +123,7 @@ func (handler ProjectsHandler) list(writer http.ResponseWriter, request *http.Re
 	if !ok {
 		return
 	}
-	query := `SELECT p.id, p.name, p.created_at FROM projects p WHERE p.organization_id = $1 ORDER BY p.name`
+	query := `SELECT p.id, p.name, p.created_at, COALESCE(array_agg(pa.user_id) FILTER (WHERE pa.user_id IS NOT NULL), ARRAY[]::uuid[]) FROM projects p LEFT JOIN project_assignments pa ON pa.project_id = p.id WHERE p.organization_id = $1 GROUP BY p.id ORDER BY p.name`
 	arguments := []any{organizationID}
 	if role == "MEMBER" {
 		query = `SELECT p.id, p.name, p.created_at FROM projects p JOIN project_assignments pa ON pa.project_id = p.id WHERE p.organization_id = $1 AND pa.user_id = $2 ORDER BY p.name`
@@ -140,11 +140,17 @@ func (handler ProjectsHandler) list(writer http.ResponseWriter, request *http.Re
 		var id uuid.UUID
 		var name string
 		var createdAt time.Time
-		if err := rows.Scan(&id, &name, &createdAt); err != nil {
+		assignedMemberIDs := make([]uuid.UUID, 0)
+		if role == "ADMIN" {
+			err = rows.Scan(&id, &name, &createdAt, &assignedMemberIDs)
+		} else {
+			err = rows.Scan(&id, &name, &createdAt)
+		}
+		if err != nil {
 			respondError(writer, 500, "INTERNAL_ERROR", "Unable to load projects.")
 			return
 		}
-		projects = append(projects, map[string]any{"id": id, "name": name, "createdAt": createdAt})
+		projects = append(projects, map[string]any{"id": id, "name": name, "createdAt": createdAt, "assignedMemberIds": assignedMemberIDs})
 	}
 	if err := rows.Err(); err != nil {
 		respondError(writer, 500, "INTERNAL_ERROR", "Unable to load projects.")

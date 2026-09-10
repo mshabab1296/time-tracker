@@ -126,7 +126,11 @@ func (handler Handler) Active(writer http.ResponseWriter, request *http.Request)
 	if !ok {
 		return
 	}
-	active, found, err := loadActive(request, handler.Database, userID, false)
+	organizationID, ok := requestedOrganization(writer, request, handler, userID)
+	if !ok {
+		return
+	}
+	active, found, err := loadActiveInOrganization(request, handler.Database, userID, organizationID)
 	if err != nil {
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to load active timer.")
 		return
@@ -295,6 +299,18 @@ func loadActive(request *http.Request, database querier, userID uuid.UUID, forUp
 		return entry{}, false, err
 	}
 	return loadEntry(request, database, id, userID, forUpdate)
+}
+
+func loadActiveInOrganization(request *http.Request, database querier, userID, organizationID uuid.UUID) (entry, bool, error) {
+	var id uuid.UUID
+	err := database.QueryRow(request.Context(), `SELECT id FROM time_entries WHERE user_id = $1 AND organization_id = $2 AND source_type = 'TIMER' AND status IN ('RUNNING', 'PAUSED')`, userID, organizationID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return entry{}, false, nil
+	}
+	if err != nil {
+		return entry{}, false, err
+	}
+	return loadEntry(request, database, id, userID, false)
 }
 
 func loadEntry(request *http.Request, database querier, entryID, userID uuid.UUID, forUpdate bool) (entry, bool, error) {

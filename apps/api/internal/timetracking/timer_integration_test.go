@@ -101,9 +101,13 @@ func TestTimerStateFlowAndRetries(t *testing.T) {
 			t.Fatalf("%s status=%q want %q", step.name, got, step.status)
 		}
 	}
-	activeRecorder := invoke(t, handler.Active, http.MethodGet, "", rawSession, "")
+	activeRecorder := invokeAt(t, handler.Active, http.MethodGet, "/api/v1/timer?organizationId="+organizationID.String(), "", rawSession, "")
 	if activeRecorder.Code != http.StatusOK || !bytes.Contains(activeRecorder.Body.Bytes(), []byte(`"data":null`)) {
 		t.Fatalf("active after stop status=%d body=%s", activeRecorder.Code, activeRecorder.Body.String())
+	}
+	todayRecorder := invokeAt(t, handler.TodayEntries, http.MethodGet, "/api/v1/time-entries/today?organizationId="+organizationID.String(), "", rawSession, "")
+	if todayRecorder.Code != http.StatusOK || !bytes.Contains(todayRecorder.Body.Bytes(), []byte(`"projectName":"Other"`)) {
+		t.Fatalf("today entries status=%d body=%s", todayRecorder.Code, todayRecorder.Body.String())
 	}
 	var eventCount int
 	if err := pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM timer_events WHERE time_entry_id = $1`, active.Data.ID).Scan(&eventCount); err != nil || eventCount != 4 {
@@ -149,8 +153,12 @@ func decodeEntry(t *testing.T, recorder *httptest.ResponseRecorder) timerRespons
 }
 
 func invoke(t *testing.T, action func(http.ResponseWriter, *http.Request), method, body, session, csrf string) *httptest.ResponseRecorder {
+	return invokeAt(t, action, method, "/api/v1/timer", body, session, csrf)
+}
+
+func invokeAt(t *testing.T, action func(http.ResponseWriter, *http.Request), method, path, body, session, csrf string) *httptest.ResponseRecorder {
 	t.Helper()
-	request := httptest.NewRequest(method, "/api/v1/timer", bytes.NewBufferString(body))
+	request := httptest.NewRequest(method, path, bytes.NewBufferString(body))
 	request.AddCookie(&http.Cookie{Name: "timetracker_session", Value: session})
 	if csrf != "" {
 		request.Header.Set("X-CSRF-Token", csrf)

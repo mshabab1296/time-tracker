@@ -63,6 +63,7 @@ func New(database *pgxpool.Pool, logger *slog.Logger, sender platformemail.Sende
 	mux.HandleFunc("GET /api/v1/time-entries/{entryID}", timetracking.Handler{Database: database}.CompletedDetail)
 	mux.HandleFunc("PATCH /api/v1/time-entries/{entryID}", timetracking.Handler{Database: database}.UpdateCompleted)
 	mux.HandleFunc("DELETE /api/v1/time-entries/{entryID}", timetracking.Handler{Database: database}.DeleteCompleted)
+	mux.HandleFunc("PUT /api/v1/time-entries/{entryID}/events", timetracking.Handler{Database: database}.UpdateTimerEvents)
 	return withRequestLogging(logger, mux)
 }
 

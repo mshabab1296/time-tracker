@@ -108,11 +108,15 @@ func validManualInput(writer http.ResponseWriter, input createManualEntryRequest
 }
 
 func entryOverlaps(request *http.Request, tx pgx.Tx, userID uuid.UUID, startedAt, endedAt time.Time) (bool, error) {
+	return entryOverlapsExcept(request, tx, userID, uuid.Nil, startedAt, endedAt)
+}
+
+func entryOverlapsExcept(request *http.Request, tx pgx.Tx, userID, excludedEntryID uuid.UUID, startedAt, endedAt time.Time) (bool, error) {
 	var entryID uuid.UUID
 	err := tx.QueryRow(request.Context(), `
 		SELECT id FROM time_entries
-		WHERE user_id = $1 AND started_at < $3 AND (ended_at IS NULL OR ended_at > $2)
-		LIMIT 1 FOR UPDATE`, userID, startedAt, endedAt).Scan(&entryID)
+		WHERE user_id = $1 AND id <> $2 AND started_at < $4 AND (ended_at IS NULL OR ended_at > $3)
+		LIMIT 1 FOR UPDATE`, userID, excludedEntryID, startedAt, endedAt).Scan(&entryID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}

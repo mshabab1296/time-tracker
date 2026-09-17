@@ -8,9 +8,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// TodayEntries returns the signed-in user's completed entries that began in
-// their current local calendar day. Reporting allocation for entries spanning
-// a day boundary is deliberately handled by the reporting slice.
+// TodayEntries returns the signed-in user's completed entries overlapping the
+// requested local calendar day. When date is omitted, it defaults to today.
 func (handler Handler) TodayEntries(writer http.ResponseWriter, request *http.Request) {
 	userID, ok := auth.AuthenticatedUserIDForRead(writer, request, handler.Database)
 	if !ok {
@@ -31,6 +30,13 @@ func (handler Handler) TodayEntries(writer http.ResponseWriter, request *http.Re
 	}
 	now := time.Now().In(location)
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, location)
+	if requestedDate := request.URL.Query().Get("date"); requestedDate != "" {
+		dayStart, err = time.ParseInLocation("2006-01-02", requestedDate, location)
+		if err != nil {
+			respondError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "Date must use YYYY-MM-DD.")
+			return
+		}
+	}
 	dayEnd := dayStart.AddDate(0, 0, 1)
 	rows, err := handler.Database.Query(request.Context(), `
 		SELECT te.id, p.name, te.started_at, te.ended_at, te.duration_seconds, te.source_type,
@@ -39,32 +45,87 @@ func (handler Handler) TodayEntries(writer http.ResponseWriter, request *http.Re
 		JOIN projects p ON p.id = te.project_id
 		LEFT JOIN time_entry_tags tet ON tet.time_entry_id = te.id
 		LEFT JOIN tags t ON t.id = tet.tag_id
-		WHERE te.user_id = $1 AND te.organization_id = $2 AND te.status = 'STOPPED' AND te.started_at >= $3 AND te.started_at < $4
+		WHERE te.user_id = $1 AND te.organization_id = $2 AND te.status = 'STOPPED' AND te.started_at < $4 AND te.ended_at > $3
 		GROUP BY te.id, p.name
 		ORDER BY te.started_at DESC`, userID, organizationID, dayStart, dayEnd)
 	if err != nil {
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to load completed entries.")
 		return
 	}
-	defer rows.Close()
-	entries := make([]map[string]any, 0)
+	type dayEntry struct {
+		id                      uuid.UUID
+		projectName, sourceType string
+		startedAt, endedAt      time.Time
+		durationSeconds         int64
+		tags                    []string
+	}
+	loaded := make([]dayEntry, 0)
 	for rows.Next() {
-		var id uuid.UUID
-		var projectName, sourceType string
-		var startedAt, endedAt time.Time
-		var durationSeconds int64
-		tags := make([]string, 0)
-		if err := rows.Scan(&id, &projectName, &startedAt, &endedAt, &durationSeconds, &sourceType, &tags); err != nil {
+		item := dayEntry{tags: make([]string, 0)}
+		if err := rows.Scan(&item.id, &item.projectName, &item.startedAt, &item.endedAt, &item.durationSeconds, &item.sourceType, &item.tags); err != nil {
+			rows.Close()
 			respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to load completed entries.")
 			return
 		}
-		entries = append(entries, map[string]any{"id": id, "projectName": projectName, "startedAt": startedAt, "endedAt": endedAt, "durationSeconds": durationSeconds, "sourceType": sourceType, "tags": tags})
+		loaded = append(loaded, item)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to load completed entries.")
 		return
 	}
+	rows.Close()
+	entries := make([]map[string]any, 0, len(loaded))
+	for _, item := range loaded {
+		durationSeconds := clippedDuration(item.startedAt, item.endedAt, dayStart, dayEnd)
+		if item.sourceType == "TIMER" {
+			durationSeconds, err = handler.timerDurationInRange(request, item.id, dayStart, dayEnd)
+			if err != nil {
+				respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to load completed entries.")
+				return
+			}
+		}
+		entries = append(entries, map[string]any{"id": item.id, "projectName": item.projectName, "startedAt": item.startedAt, "endedAt": item.endedAt, "durationSeconds": durationSeconds, "sourceType": item.sourceType, "tags": item.tags})
+	}
 	respond(writer, http.StatusOK, entries)
+}
+
+func (handler Handler) timerDurationInRange(request *http.Request, entryID uuid.UUID, rangeStart, rangeEnd time.Time) (int64, error) {
+	rows, err := handler.Database.Query(request.Context(), `SELECT event_type, occurred_at FROM timer_events WHERE time_entry_id = $1 ORDER BY sequence_number`, entryID)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var total int64
+	var activeStartedAt *time.Time
+	for rows.Next() {
+		var eventType string
+		var occurredAt time.Time
+		if err := rows.Scan(&eventType, &occurredAt); err != nil {
+			return 0, err
+		}
+		if eventType == "START" || eventType == "RESUME" {
+			at := occurredAt
+			activeStartedAt = &at
+		} else if (eventType == "PAUSE" || eventType == "STOP") && activeStartedAt != nil {
+			total += clippedDuration(*activeStartedAt, occurredAt, rangeStart, rangeEnd)
+			activeStartedAt = nil
+		}
+	}
+	return total, rows.Err()
+}
+
+func clippedDuration(startedAt, endedAt, rangeStart, rangeEnd time.Time) int64 {
+	if startedAt.Before(rangeStart) {
+		startedAt = rangeStart
+	}
+	if endedAt.After(rangeEnd) {
+		endedAt = rangeEnd
+	}
+	if !endedAt.After(startedAt) {
+		return 0
+	}
+	return int64(endedAt.Sub(startedAt).Seconds())
 }
 
 // WeekSummary returns the signed-in user's completed time for the current

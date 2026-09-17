@@ -10,6 +10,7 @@ import (
 	"github.com/fortune-tech/time-tracker/apps/api/internal/auth"
 	"github.com/fortune-tech/time-tracker/apps/api/internal/organizations"
 	platformemail "github.com/fortune-tech/time-tracker/apps/api/internal/platform/email"
+	"github.com/fortune-tech/time-tracker/apps/api/internal/reporting"
 	"github.com/fortune-tech/time-tracker/apps/api/internal/timetracking"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -64,6 +65,9 @@ func New(database *pgxpool.Pool, logger *slog.Logger, sender platformemail.Sende
 	mux.HandleFunc("PATCH /api/v1/time-entries/{entryID}", timetracking.Handler{Database: database}.UpdateCompleted)
 	mux.HandleFunc("DELETE /api/v1/time-entries/{entryID}", timetracking.Handler{Database: database}.DeleteCompleted)
 	mux.HandleFunc("PUT /api/v1/time-entries/{entryID}/events", timetracking.Handler{Database: database}.UpdateTimerEvents)
+	mux.HandleFunc("GET /api/v1/reports/entries", reporting.Handler{Database: database}.Entries)
+	mux.HandleFunc("GET /api/v1/reports/summary", reporting.Handler{Database: database}.Summary)
+	mux.HandleFunc("GET /api/v1/reports/export", reporting.Handler{Database: database}.Export)
 	return withRequestLogging(logger, mux)
 }
 

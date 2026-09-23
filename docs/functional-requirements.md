@@ -2,7 +2,7 @@
 
 ## 1. Purpose and Scope
 
-TimeTracker is an organization-based application for recording working time and producing timesheets. V1 focuses on time tracking, organization membership, projects, tags, and reports. It is not a task-management, payroll, attendance, or productivity-monitoring product.
+TimeTracker is an organization-based application for recording working time and producing timesheets. V1 focuses on time tracking, organization membership, projects, ticket references, tags, and reports. It is not a task-management, payroll, attendance, or productivity-monitoring product.
 
 ## 2. Accounts and Authentication
 
@@ -30,8 +30,8 @@ TimeTracker is an organization-based application for recording working time and 
 ### FR-3 Roles and permissions
 
 1. V1 has two organization roles: `ADMIN` and `MEMBER`.
-2. An Admin can manage members, projects, tags, and organization reports in their own organization.
-3. A Member can record and manage their own time, view their assigned projects, and use organization tags.
+2. An Admin can manage members, projects, tags, all organization tickets, and organization reports in their own organization.
+3. A Member can record and manage their own time, view their assigned projects, use organization tags, and manage tickets they created.
 4. An Admin can view, edit, and delete time entries for members of their own organization only.
 5. Members cannot manage projects, tags, or other members.
 
@@ -50,7 +50,7 @@ TimeTracker is an organization-based application for recording working time and 
 11. A removed Member's historical time entries shall remain unchanged and available in the organization's historical reports, but the removed Member shall no longer have organization access.
 12. An Admin shall not remove a Member while that Member has a `RUNNING` or `PAUSED` timer. The timer must be stopped first.
 
-## 4. Projects and Tags
+## 4. Projects, Tickets, and Tags
 
 ### FR-5 Projects
 
@@ -75,12 +75,23 @@ TimeTracker is an organization-based application for recording working time and 
 6. Renaming a tag shall be reflected everywhere, including historical time entries and reports that reference it.
 7. A tag name shall be required and unique within its organization, case-insensitively.
 
+### FR-6A Tickets
+
+1. A ticket shall be an organization-owned reference to a specific piece of work, separate from reusable tags and from the TimeTracker project used to record time. V1 shall not manage ticket workflow, assignments, status, or comments.
+2. A ticket shall have a required reference (for example, `FLOW-123`) and title. Its reference shall be unique within its organization, case-insensitively.
+3. A time entry may reference zero or more tickets, and a ticket may be linked to many entries. Ticket selection shall be available when starting a timer, creating a manual entry, and editing an active or completed entry. Duplicate ticket selections on one entry are not allowed.
+4. Renaming a ticket reference or title shall be reflected in entries and reports that reference it. A ticket with linked entries shall not be deletable, so historical reports retain their reference.
+5. Ticket search and management lists shall be server-filtered and paginated; the time-entry picker shall not require downloading every ticket in the organization.
+6. V1 tickets shall be created and maintained in TimeTracker. Synchronization with Jira or another ticket board, provider credentials, and bidirectional updates are deferred; the model shall not assume a Jira-only identifier.
+7. A Member may create ticket references in their organization and edit or delete only tickets they created. An Admin may create, edit, and delete any ticket in their organization. All current organization members may view and select its tickets, regardless of creator.
+8. Deletion is blocked while any time entry references the ticket, regardless of who requests it. Removing the creator from the organization shall not delete the ticket or change historical entries; the former Member loses ticket-management access there.
+
 ## 5. Time Tracking
 
 ### FR-7 Timers
 
 1. A user shall be able to start, pause, resume, and stop a timer.
-2. Starting a timer shall create a time entry in the selected organization with one required assigned project and optional tags.
+2. Starting a timer shall create a time entry in the selected organization with a required short task description, one required assigned project, and optional tickets and tags.
 3. A user shall have at most one active timer globally across all organizations. Both `RUNNING` and `PAUSED` timers are active.
 4. A timer shall continue to run when the user's browser, application, or device is closed or disconnected.
 5. Starting a timer always uses the current server time; a user cannot begin a timer at a past timestamp. Backdated work shall be recorded as a manual entry.
@@ -89,7 +100,7 @@ TimeTracker is an organization-based application for recording working time and 
 8. The system shall retain the timer's start, pause, resume, and stop event history for a timer-generated entry.
 9. A timer may be paused only while `RUNNING`, resumed only while `PAUSED`, and stopped while either `RUNNING` or `PAUSED`.
 10. An active (`RUNNING` or `PAUSED`) timer shall not be deletable.
-11. A user may change the project and tags of an active timer in V1, provided the user is assigned to the newly selected project.
+11. A user may change the task description, project, tickets, and tags of an active timer in V1, provided the user is assigned to the newly selected project.
 
 ### FR-8 Manual entries and entry validation
 
@@ -101,6 +112,8 @@ TimeTracker is an organization-based application for recording working time and 
 6. A user's time entries shall not overlap. Adjacent entries are allowed.
 7. This no-overlap rule applies to manual entries and timer-generated entries, including after edits.
 8. A time entry may span midnight. When a report is grouped or filtered by day, its duration shall be allocated across the applicable report-day boundaries.
+9. Every new time entry, including a manual entry, shall require a non-blank task description of at most 200 characters. Existing entries without a recorded description shall be marked as unspecified during migration.
+10. A manual entry may optionally reference multiple tickets from its organization.
 
 ### FR-9 Entry management
 
@@ -110,31 +123,34 @@ TimeTracker is an organization-based application for recording working time and 
 4. They shall be able to add or remove `PAUSE` + `RESUME` event pairs. The `START` and `STOP` events are mandatory.
 5. Edited timer events shall remain chronologically ordered and form a valid event sequence. The system shall recalculate duration and revalidate the no-overlap and no-future-time rules.
 6. A Member cannot view or manage another Member's entries.
-7. The entry owner and an authorized Admin may reassign a completed entry to a different project and add or remove its tags. The entry owner must be assigned to the selected project, and the normal no-overlap and no-future-time rules apply.
+7. The entry owner and an authorized Admin may reassign a completed entry to a different project and add or remove its tickets and tags. The entry owner must be assigned to the selected project; every ticket must belong to the entry's organization; and the normal no-overlap and no-future-time rules apply.
 8. Deleting a completed time entry shall permanently remove the entry and its dependent timer events and tag links. Its audit record shall remain.
+9. The entry owner and an authorized Admin may edit a completed entry's task description, whether it originated from a manual entry or a timer.
 
 ## 6. Reports and Exports
 
 ### FR-10 Personal reports
 
 1. A user shall be able to view their own completed time entries and total tracked duration.
-2. The user shall be able to filter their personal report by date range, project, and tag.
-3. The user shall be able to group a personal summary by any combination and order of Project, Tag, and Date.
+2. The user shall be able to filter their personal report by date range, project, tickets, and tags. Selecting multiple tickets shall match entries linked to any selected ticket.
+3. The user shall be able to group a personal summary by any combination and order of Project, Ticket, Tag, and Date.
 4. The user shall be able to download detailed and summary CSV versions of the filtered personal report.
 5. When filtering by multiple tags, an entry shall match if it has any selected tag.
 6. When grouped by tag, an entry with multiple tags shall appear in each applicable tag group; therefore, tag-group totals are not additive.
+7. Detailed report rows and CSV exports shall include all linked ticket references and titles when present; entries without tickets shall remain visible and group under an explicit no-ticket value when grouped by Ticket. An entry linked to multiple tickets shall appear in each matching Ticket group; overall report totals and detailed rows shall count the entry only once.
 
 ### FR-11 Organization reports
 
 1. An Admin shall be able to view timesheets and total tracked duration for all members of their organization.
-2. An Admin shall be able to filter the report by date range, Member, Project, and Tag.
-3. An Admin shall be able to group a summary by any combination and order of Member, Project, Tag, and Date.
+2. An Admin shall be able to filter the report by date range, Member, Project, Ticket, and Tag.
+3. An Admin shall be able to group a summary by any combination and order of Member, Project, Ticket, Tag, and Date.
 4. Date grouping shall support Day, Week, and Month.
 5. Reports shall allow arbitrary start and end dates; the end date is inclusive.
 6. Reports shall include completed entries only. `RUNNING` and `PAUSED` timers shall not be included in report totals.
 7. The Admin shall be able to download both detailed and summary CSV exports. Detailed CSV includes individual entries; summary CSV aggregates the filtered data using the selected grouping.
 8. When filtering by multiple tags, an entry shall match if it has any selected tag.
 9. When grouped by tag, an entry with multiple tags shall appear in each applicable tag group; therefore, tag-group totals are not additive.
+10. Detailed report rows and CSV exports shall include all linked ticket references and titles when present; entries without tickets shall remain visible and group under an explicit no-ticket value when grouped by Ticket. An entry linked to multiple tickets shall appear in each matching Ticket group; overall report totals and detailed rows shall count the entry only once.
 
 ## 7. Timezones
 
@@ -153,12 +169,8 @@ TimeTracker is an organization-based application for recording working time and 
 - Admin transfer and self-service organization departure
 - Project archival
 - Tasks, task assignment, and broader project management
+- Jira and other ticket-board synchronization, provider credentials, and ticket workflow management
 - Payroll, billing, invoices, attendance, screenshots, and general productivity monitoring
 - PDF exports
 - General notifications beyond invitation delivery and in-app invitations
 - Timezone-history preservation
-
-
-
-
-

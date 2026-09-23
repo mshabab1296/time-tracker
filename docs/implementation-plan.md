@@ -32,6 +32,7 @@ internal/
 ├── organizations/
 ├── projects/
 ├── tags/
+├── tickets/                # Provider-neutral work references
 ├── timeentries/
 ├── reports/
 ├── invitations/
@@ -134,6 +135,22 @@ Members can manage their completed work; authorized Admins can manage organizati
 
 The UI displays correctly filtered, paginated personal and Admin reports, and CSV downloads match the screen/report rules.
 
+## 9A. Phase 5A — Ticket References Slice (design amendment)
+
+This slice follows the already-planned reporting work and precedes release hardening. Members may manage tickets they created; Admins may manage all organization tickets. The implementation and authorization tests shall enforce that ownership rule.
+
+### Scope
+
+- Add a `tickets` migration with `created_by_user_id`, case-insensitive ticket-reference uniqueness, and lookup indexes. Follow it with a forward migration from the original nullable `time_entries.ticket_id` to `time_entry_tickets`, preserving existing links and enforcing same-organization referential integrity.
+- Implement organization-scoped ticket create, list/search, update, and delete endpoints, including linked-entry deletion protection and audit records. Keep the domain provider-neutral and do not add Jira credentials or synchronization.
+- Add a paginated ticket-management screen and bounded server-backed multi-ticket picker to timer, manual-entry, and completed-entry workflows. Display all linked tickets in entry details.
+- Extend personal and organization report filters, groupings, screen rows, and CSV exports to support multiple tickets per entry; preserve behavior for entries with no ticket and avoid double-counting detailed/overall totals.
+- Cover creator-versus-Admin permissions, revoked membership, organization isolation, duplicate references, entry-ticket linkage, historical renames, deletion restrictions, search/pagination, and report/export totals with tests.
+
+### Done when
+
+Users can attach multiple optional organization tickets to time entries and report time by ticket without creating one tag per work item. Ticket lists and pickers remain bounded as the catalog grows. Existing entries continue to work without tickets, and no external ticket-board integration is required.
+
 ## 10. Phase 6 — Hardening and Release Readiness
 
 ### Scope
@@ -176,4 +193,4 @@ Merging a tested change to `main` deploys it automatically to the single product
 - Background email retry queue.
 - Async/S3-persisted report exports.
 - Cross-region backups, automated restore drills, paid staging, and high-availability multi-server deployment.
-- Organization deletion, account deletion, project archival, task management, payroll, and other features already out of V1 scope.
+- Organization deletion, account deletion, project archival, ticket-board synchronization, ticket workflow management, payroll, and other features already out of V1 scope.

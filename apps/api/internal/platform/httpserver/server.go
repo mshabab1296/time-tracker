@@ -11,6 +11,7 @@ import (
 	"github.com/fortune-tech/time-tracker/apps/api/internal/organizations"
 	platformemail "github.com/fortune-tech/time-tracker/apps/api/internal/platform/email"
 	"github.com/fortune-tech/time-tracker/apps/api/internal/reporting"
+	"github.com/fortune-tech/time-tracker/apps/api/internal/tickets"
 	"github.com/fortune-tech/time-tracker/apps/api/internal/timetracking"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -45,6 +46,11 @@ func New(database *pgxpool.Pool, logger *slog.Logger, sender platformemail.Sende
 	mux.Handle("POST /api/v1/organizations/{organizationID}/tags", organizations.TagsHandler{Database: database})
 	mux.Handle("PATCH /api/v1/organizations/{organizationID}/tags/{tagID}", organizations.TagHandler{Database: database})
 	mux.Handle("DELETE /api/v1/organizations/{organizationID}/tags/{tagID}", organizations.TagHandler{Database: database})
+	mux.HandleFunc("GET /api/v1/organizations/{organizationID}/tickets", tickets.Handler{Database: database}.List)
+	mux.HandleFunc("POST /api/v1/organizations/{organizationID}/tickets", tickets.Handler{Database: database}.Create)
+	mux.HandleFunc("GET /api/v1/organizations/{organizationID}/tickets/{ticketID}", tickets.Handler{Database: database}.Get)
+	mux.HandleFunc("PATCH /api/v1/organizations/{organizationID}/tickets/{ticketID}", tickets.Handler{Database: database}.Update)
+	mux.HandleFunc("DELETE /api/v1/organizations/{organizationID}/tickets/{ticketID}", tickets.Handler{Database: database}.Delete)
 	mux.Handle("POST /api/v1/organizations/{organizationID}/invitations", organizations.InvitationCreateHandler{Database: database, Email: sender, WebBaseURL: webBaseURL})
 	mux.Handle("GET /api/v1/organizations/{organizationID}/invitations", organizations.OrganizationInvitationListHandler{Database: database})
 	mux.Handle("POST /api/v1/organizations/{organizationID}/invitations/{invitationID}/resend", organizations.InvitationResendHandler{Database: database, Email: sender, WebBaseURL: webBaseURL})

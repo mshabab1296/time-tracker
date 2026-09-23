@@ -15,12 +15,15 @@ import (
 )
 
 const maximumTagsPerEntry = 50
+const maximumTicketsPerEntry = 50
 
 type Handler struct{ Database *pgxpool.Pool }
 
 type startRequest struct {
 	OrganizationID uuid.UUID   `json:"organizationId"`
 	ProjectID      uuid.UUID   `json:"projectId"`
+	TicketIDs      []uuid.UUID `json:"ticketIds"`
+	Description    string      `json:"description"`
 	TagIDs         []uuid.UUID `json:"tagIds"`
 }
 
@@ -29,9 +32,11 @@ type actionRequest struct {
 }
 
 type updateActiveRequest struct {
-	EntryID   uuid.UUID   `json:"entryId"`
-	ProjectID uuid.UUID   `json:"projectId"`
-	TagIDs    []uuid.UUID `json:"tagIds"`
+	EntryID     uuid.UUID   `json:"entryId"`
+	ProjectID   uuid.UUID   `json:"projectId"`
+	TicketIDs   []uuid.UUID `json:"ticketIds"`
+	Description string      `json:"description"`
+	TagIDs      []uuid.UUID `json:"tagIds"`
 }
 
 type timerEvent struct {
@@ -44,6 +49,8 @@ type entry struct {
 	OrganizationID  uuid.UUID
 	UserID          uuid.UUID
 	ProjectID       uuid.UUID
+	TicketIDs       []uuid.UUID
+	Description     string
 	Status          string
 	StartedAt       time.Time
 	EndedAt         *time.Time
@@ -61,6 +68,7 @@ func (handler Handler) Start(writer http.ResponseWriter, request *http.Request) 
 	if !decodeJSON(writer, request, &input) || !validStartInput(writer, input) {
 		return
 	}
+	input.Description, _ = normalizedDescription(input.Description)
 	tx, err := handler.Database.BeginTx(request.Context(), pgx.TxOptions{})
 	if err != nil {
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to start timer.")
@@ -77,15 +85,15 @@ func (handler Handler) Start(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	if found {
-		if active.OrganizationID == input.OrganizationID && active.ProjectID == input.ProjectID && sameTags(active.TagIDs, input.TagIDs) {
+		if active.OrganizationID == input.OrganizationID && active.ProjectID == input.ProjectID && sameTags(active.TicketIDs, input.TicketIDs) && active.Description == input.Description && sameTags(active.TagIDs, input.TagIDs) {
 			respondEntry(writer, http.StatusOK, active, time.Now().UTC())
 			return
 		}
 		respondError(writer, http.StatusConflict, "ACTIVE_TIMER_EXISTS", "Stop the active timer before starting another one.")
 		return
 	}
-	if !validateSelection(request, tx, userID, input.OrganizationID, input.ProjectID, input.TagIDs) {
-		respondError(writer, http.StatusForbidden, "INVALID_TIMER_SELECTION", "Select an accessible project and tags from the same organization.")
+	if !validateSelection(request, tx, userID, input.OrganizationID, input.ProjectID, input.TagIDs) || !validTicketSelection(request, tx, input.OrganizationID, input.TicketIDs) {
+		respondError(writer, http.StatusForbidden, "INVALID_TIMER_SELECTION", "Select an accessible project, tickets, and tags from the same organization.")
 		return
 	}
 	entryID, err := uuid.NewV7()
@@ -99,7 +107,7 @@ func (handler Handler) Start(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	now := time.Now().UTC()
-	_, err = tx.Exec(request.Context(), `INSERT INTO time_entries (id, organization_id, user_id, project_id, source_type, status, started_at) VALUES ($1, $2, $3, $4, 'TIMER', 'RUNNING', $5)`, entryID, input.OrganizationID, userID, input.ProjectID, now)
+	_, err = tx.Exec(request.Context(), `INSERT INTO time_entries (id, organization_id, user_id, project_id, description, source_type, status, started_at) VALUES ($1, $2, $3, $4, $5, 'TIMER', 'RUNNING', $6)`, entryID, input.OrganizationID, userID, input.ProjectID, input.Description, now)
 	if uniqueViolation(err) {
 		respondError(writer, http.StatusConflict, "ACTIVE_TIMER_EXISTS", "Stop the active timer before starting another one.")
 		return
@@ -110,6 +118,9 @@ func (handler Handler) Start(writer http.ResponseWriter, request *http.Request) 
 	if err == nil {
 		err = replaceTags(request, tx, entryID, input.TagIDs)
 	}
+	if err == nil {
+		err = replaceTickets(request, tx, input.OrganizationID, entryID, input.TicketIDs)
+	}
 	if err != nil {
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to start timer.")
 		return
@@ -118,7 +129,7 @@ func (handler Handler) Start(writer http.ResponseWriter, request *http.Request) 
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to start timer.")
 		return
 	}
-	respondEntry(writer, http.StatusCreated, entry{ID: entryID, OrganizationID: input.OrganizationID, UserID: userID, ProjectID: input.ProjectID, Status: "RUNNING", StartedAt: now, TagIDs: input.TagIDs, Events: []timerEvent{{Type: "START", At: now}}}, now)
+	respondEntry(writer, http.StatusCreated, entry{ID: entryID, OrganizationID: input.OrganizationID, UserID: userID, ProjectID: input.ProjectID, TicketIDs: input.TicketIDs, Description: input.Description, Status: "RUNNING", StartedAt: now, TagIDs: input.TagIDs, Events: []timerEvent{{Type: "START", At: now}}}, now)
 }
 
 func (handler Handler) Active(writer http.ResponseWriter, request *http.Request) {
@@ -233,8 +244,14 @@ func (handler Handler) UpdateActive(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	var input updateActiveRequest
-	if !decodeJSON(writer, request, &input) || input.EntryID == uuid.Nil || input.ProjectID == uuid.Nil || !validTagIDs(input.TagIDs) {
-		respondError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "Provide a timer entry, project, and up to 50 unique tags.")
+	if !decodeJSON(writer, request, &input) || input.EntryID == uuid.Nil || input.ProjectID == uuid.Nil || !validTagIDs(input.TagIDs) || !validTicketIDs(input.TicketIDs) {
+		respondError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "Provide a timer entry, project, and up to 50 unique tags and tickets.")
+		return
+	}
+	var descriptionValid bool
+	input.Description, descriptionValid = normalizedDescription(input.Description)
+	if !descriptionValid {
+		respondError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "Task description is required and must be 200 characters or fewer.")
 		return
 	}
 	tx, err := handler.Database.BeginTx(request.Context(), pgx.TxOptions{})
@@ -260,13 +277,16 @@ func (handler Handler) UpdateActive(writer http.ResponseWriter, request *http.Re
 		respondError(writer, http.StatusConflict, "INVALID_TIMER_STATE", "Only an active timer can be updated here.")
 		return
 	}
-	if !validateSelection(request, tx, userID, current.OrganizationID, input.ProjectID, input.TagIDs) {
-		respondError(writer, http.StatusForbidden, "INVALID_TIMER_SELECTION", "Select an accessible project and tags from the same organization.")
+	if !validateSelection(request, tx, userID, current.OrganizationID, input.ProjectID, input.TagIDs) || !validTicketSelection(request, tx, current.OrganizationID, input.TicketIDs) {
+		respondError(writer, http.StatusForbidden, "INVALID_TIMER_SELECTION", "Select an accessible project, tickets, and tags from the same organization.")
 		return
 	}
-	_, err = tx.Exec(request.Context(), `UPDATE time_entries SET project_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, input.ProjectID, current.ID)
+	_, err = tx.Exec(request.Context(), `UPDATE time_entries SET project_id = $1, description = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`, input.ProjectID, input.Description, current.ID)
 	if err == nil {
 		err = replaceTags(request, tx, current.ID, input.TagIDs)
+	}
+	if err == nil {
+		err = replaceTickets(request, tx, current.OrganizationID, current.ID, input.TicketIDs)
 	}
 	if err != nil {
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to update timer.")
@@ -276,7 +296,7 @@ func (handler Handler) UpdateActive(writer http.ResponseWriter, request *http.Re
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to update timer.")
 		return
 	}
-	current.ProjectID, current.TagIDs = input.ProjectID, input.TagIDs
+	current.ProjectID, current.TicketIDs, current.Description, current.TagIDs = input.ProjectID, input.TicketIDs, input.Description, input.TagIDs
 	respondEntry(writer, http.StatusOK, current, time.Now().UTC())
 }
 
@@ -314,12 +334,12 @@ func loadActiveInOrganization(request *http.Request, database querier, userID, o
 }
 
 func loadEntry(request *http.Request, database querier, entryID, userID uuid.UUID, forUpdate bool) (entry, bool, error) {
-	query := `SELECT id, organization_id, user_id, project_id, status, started_at, ended_at, duration_seconds FROM time_entries WHERE id = $1 AND user_id = $2 AND source_type = 'TIMER'`
+	query := `SELECT id, organization_id, user_id, project_id, description, status, started_at, ended_at, duration_seconds FROM time_entries WHERE id = $1 AND user_id = $2 AND source_type = 'TIMER'`
 	if forUpdate {
 		query += ` FOR UPDATE`
 	}
 	var result entry
-	err := database.QueryRow(request.Context(), query, entryID, userID).Scan(&result.ID, &result.OrganizationID, &result.UserID, &result.ProjectID, &result.Status, &result.StartedAt, &result.EndedAt, &result.DurationSeconds)
+	err := database.QueryRow(request.Context(), query, entryID, userID).Scan(&result.ID, &result.OrganizationID, &result.UserID, &result.ProjectID, &result.Description, &result.Status, &result.StartedAt, &result.EndedAt, &result.DurationSeconds)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return entry{}, false, nil
 	}
@@ -353,7 +373,23 @@ func loadEntry(request *http.Request, database querier, entryID, userID uuid.UUI
 		}
 		result.TagIDs = append(result.TagIDs, id)
 	}
-	return result, true, tagRows.Err()
+	if err = tagRows.Err(); err != nil {
+		return entry{}, false, err
+	}
+	tagRows.Close()
+	ticketRows, err := database.Query(request.Context(), `SELECT ticket_id FROM time_entry_tickets WHERE time_entry_id = $1 ORDER BY ticket_id`, result.ID)
+	if err != nil {
+		return entry{}, false, err
+	}
+	defer ticketRows.Close()
+	for ticketRows.Next() {
+		var id uuid.UUID
+		if err = ticketRows.Scan(&id); err != nil {
+			return entry{}, false, err
+		}
+		result.TicketIDs = append(result.TicketIDs, id)
+	}
+	return result, true, ticketRows.Err()
 }
 
 func validateSelection(request *http.Request, tx pgx.Tx, userID, organizationID, projectID uuid.UUID, tagIDs []uuid.UUID) bool {
@@ -373,6 +409,45 @@ func validateSelection(request *http.Request, tx pgx.Tx, userID, organizationID,
 		}
 	}
 	return true
+}
+
+func validTicketSelection(request *http.Request, tx pgx.Tx, organizationID uuid.UUID, ticketIDs []uuid.UUID) bool {
+	if !validTicketIDs(ticketIDs) {
+		return false
+	}
+	for _, id := range ticketIDs {
+		var found bool
+		if tx.QueryRow(request.Context(), `SELECT EXISTS(SELECT 1 FROM tickets WHERE id = $1 AND organization_id = $2)`, id, organizationID).Scan(&found) != nil || !found {
+			return false
+		}
+	}
+	return true
+}
+
+func validTicketIDs(ids []uuid.UUID) bool {
+	if len(ids) > maximumTicketsPerEntry {
+		return false
+	}
+	seen := make(map[uuid.UUID]bool, len(ids))
+	for _, id := range ids {
+		if id == uuid.Nil || seen[id] {
+			return false
+		}
+		seen[id] = true
+	}
+	return true
+}
+
+func replaceTickets(request *http.Request, tx pgx.Tx, organizationID, entryID uuid.UUID, ticketIDs []uuid.UUID) error {
+	if _, err := tx.Exec(request.Context(), `DELETE FROM time_entry_tickets WHERE time_entry_id = $1`, entryID); err != nil {
+		return err
+	}
+	for _, id := range ticketIDs {
+		if _, err := tx.Exec(request.Context(), `INSERT INTO time_entry_tickets (organization_id, time_entry_id, ticket_id) VALUES ($1, $2, $3)`, organizationID, entryID, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func replaceTags(request *http.Request, tx pgx.Tx, entryID uuid.UUID, tagIDs []uuid.UUID) error {
@@ -433,12 +508,14 @@ func respondEntry(writer http.ResponseWriter, status int, value entry, now time.
 	}
 	tags := make([]uuid.UUID, 0, len(value.TagIDs))
 	tags = append(tags, value.TagIDs...)
-	respond(writer, status, map[string]any{"id": value.ID, "organizationId": value.OrganizationID, "projectId": value.ProjectID, "tagIds": tags, "status": value.Status, "startedAt": value.StartedAt, "endedAt": value.EndedAt, "durationSeconds": durationSeconds, "events": events})
+	tickets := append([]uuid.UUID{}, value.TicketIDs...)
+	respond(writer, status, map[string]any{"id": value.ID, "organizationId": value.OrganizationID, "projectId": value.ProjectID, "ticketIds": tickets, "description": value.Description, "tagIds": tags, "status": value.Status, "startedAt": value.StartedAt, "endedAt": value.EndedAt, "durationSeconds": durationSeconds, "events": events})
 }
 
 func validStartInput(writer http.ResponseWriter, input startRequest) bool {
-	if input.OrganizationID == uuid.Nil || input.ProjectID == uuid.Nil || !validTagIDs(input.TagIDs) {
-		respondError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "Provide an organization, project, and up to 50 unique tags.")
+	_, descriptionValid := normalizedDescription(input.Description)
+	if input.OrganizationID == uuid.Nil || input.ProjectID == uuid.Nil || !validTagIDs(input.TagIDs) || !validTicketIDs(input.TicketIDs) || !descriptionValid {
+		respondError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "Provide an organization, project, task description (up to 200 characters), and up to 50 unique tags and tickets.")
 		return false
 	}
 	return true

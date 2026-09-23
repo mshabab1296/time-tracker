@@ -64,3 +64,16 @@ func TestTagGroupingDuplicatesDurationAcrossTags(t *testing.T) {
 		t.Fatalf("groupCombinations() returned %d groups, want 2", len(groups))
 	}
 }
+
+func TestTicketGroupingIncludesEveryLinkedTicket(t *testing.T) {
+	first, second := uuid.New(), uuid.New()
+	entry := reportEntry{TicketIDs: []uuid.UUID{first, second}, TicketReferences: []string{"APP-1", "APP-2"}}
+	groups := groupCombinations(entry, time.Now(), []string{"ticket"}, "day")
+	if len(groups) != 2 || groups[0][0].Key != first.String() || groups[1][0].Key != second.String() {
+		t.Fatalf("ticket groups = %+v", groups)
+	}
+	entry.TicketIDs = nil
+	if got := groupCombinations(entry, time.Now(), []string{"ticket"}, "day"); len(got) != 1 || got[0][0].Label != "No ticket" {
+		t.Fatalf("unlinked ticket group = %+v", got)
+	}
+}

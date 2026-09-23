@@ -39,7 +39,8 @@ func (handler Handler) TodayEntries(writer http.ResponseWriter, request *http.Re
 	}
 	dayEnd := dayStart.AddDate(0, 0, 1)
 	rows, err := handler.Database.Query(request.Context(), `
-		SELECT te.id, p.name, te.started_at, te.ended_at, te.duration_seconds, te.source_type,
+		SELECT te.id, p.name, te.description, te.started_at, te.ended_at, te.duration_seconds, te.source_type,
+		       ARRAY(SELECT ticket.reference FROM time_entry_tickets teticket JOIN tickets ticket ON ticket.id = teticket.ticket_id WHERE teticket.time_entry_id = te.id ORDER BY ticket.reference),
 		       COALESCE(array_agg(t.name) FILTER (WHERE t.id IS NOT NULL), ARRAY[]::text[])
 		FROM time_entries te
 		JOIN projects p ON p.id = te.project_id
@@ -53,16 +54,17 @@ func (handler Handler) TodayEntries(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	type dayEntry struct {
-		id                      uuid.UUID
-		projectName, sourceType string
-		startedAt, endedAt      time.Time
-		durationSeconds         int64
-		tags                    []string
+		id                                   uuid.UUID
+		projectName, description, sourceType string
+		ticketReferences                     []string
+		startedAt, endedAt                   time.Time
+		durationSeconds                      int64
+		tags                                 []string
 	}
 	loaded := make([]dayEntry, 0)
 	for rows.Next() {
 		item := dayEntry{tags: make([]string, 0)}
-		if err := rows.Scan(&item.id, &item.projectName, &item.startedAt, &item.endedAt, &item.durationSeconds, &item.sourceType, &item.tags); err != nil {
+		if err := rows.Scan(&item.id, &item.projectName, &item.description, &item.startedAt, &item.endedAt, &item.durationSeconds, &item.sourceType, &item.ticketReferences, &item.tags); err != nil {
 			rows.Close()
 			respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to load completed entries.")
 			return
@@ -85,7 +87,7 @@ func (handler Handler) TodayEntries(writer http.ResponseWriter, request *http.Re
 				return
 			}
 		}
-		entries = append(entries, map[string]any{"id": item.id, "projectName": item.projectName, "startedAt": item.startedAt, "endedAt": item.endedAt, "durationSeconds": durationSeconds, "sourceType": item.sourceType, "tags": item.tags})
+		entries = append(entries, map[string]any{"id": item.id, "projectName": item.projectName, "ticketReferences": item.ticketReferences, "description": item.description, "startedAt": item.startedAt, "endedAt": item.endedAt, "durationSeconds": durationSeconds, "sourceType": item.sourceType, "tags": item.tags})
 	}
 	respond(writer, http.StatusOK, entries)
 }
@@ -128,8 +130,9 @@ func clippedDuration(startedAt, endedAt, rangeStart, rangeEnd time.Time) int64 {
 	return int64(endedAt.Sub(startedAt).Seconds())
 }
 
-// WeekSummary returns the signed-in user's completed time for the current
-// Monday-Sunday week, grouped by the user's local calendar day.
+// WeekSummary returns the signed-in user's completed time for the requested
+// Monday-Sunday week, grouped by the user's local calendar day. It defaults to
+// the current week when date is omitted.
 func (handler Handler) WeekSummary(writer http.ResponseWriter, request *http.Request) {
 	userID, ok := auth.AuthenticatedUserIDForRead(writer, request, handler.Database)
 	if !ok {
@@ -145,6 +148,14 @@ func (handler Handler) WeekSummary(writer http.ResponseWriter, request *http.Req
 	}
 	now := time.Now().In(location)
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, location)
+	if requestedDate := request.URL.Query().Get("date"); requestedDate != "" {
+		var err error
+		today, err = time.ParseInLocation("2006-01-02", requestedDate, location)
+		if err != nil {
+			respondError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "Date must use YYYY-MM-DD.")
+			return
+		}
+	}
 	daysSinceMonday := (int(today.Weekday()) + 6) % 7
 	weekStart := today.AddDate(0, 0, -daysSinceMonday)
 	weekEnd := weekStart.AddDate(0, 0, 7)

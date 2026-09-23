@@ -54,7 +54,7 @@ func TestActiveTimerBlocksMemberAndAssignmentRemovalAndReferencedResourceDeletio
 		_, err = pool.Exec(context.Background(), `INSERT INTO tags (id, organization_id, name) VALUES ($1, $2, 'Tracked tag')`, tagID, organizationID)
 	}
 	if err == nil {
-		_, err = pool.Exec(context.Background(), `INSERT INTO time_entries (id, organization_id, user_id, project_id, source_type, status, started_at) VALUES ($1, $2, $3, $4, 'TIMER', 'RUNNING', CURRENT_TIMESTAMP)`, entryID, organizationID, memberID, projectID)
+		_, err = pool.Exec(context.Background(), `INSERT INTO time_entries (id, organization_id, user_id, project_id, description, source_type, status, started_at) VALUES ($1, $2, $3, $4, 'Test task', 'TIMER', 'RUNNING', CURRENT_TIMESTAMP)`, entryID, organizationID, memberID, projectID)
 	}
 	if err == nil {
 		_, err = pool.Exec(context.Background(), `INSERT INTO time_entry_tags (time_entry_id, tag_id) VALUES ($1, $2)`, entryID, tagID)

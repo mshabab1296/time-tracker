@@ -19,17 +19,19 @@ import (
 
 const maximumReportEntries = 10000
 
-var validGroupDimensions = map[string]bool{"member": true, "project": true, "tag": true, "date": true}
+var validGroupDimensions = map[string]bool{"member": true, "project": true, "ticket": true, "tag": true, "date": true}
 
 type Handler struct{ Database *pgxpool.Pool }
 
 type reportEntry struct {
-	ID, OrganizationID, UserID, ProjectID uuid.UUID
-	UserName, ProjectName, SourceType     string
-	StartedAt, EndedAt                    time.Time
-	DurationSeconds                       int64
-	TagIDs                                []uuid.UUID
-	TagNames                              []string
+	ID, OrganizationID, UserID, ProjectID          uuid.UUID
+	UserName, ProjectName, Description, SourceType string
+	StartedAt, EndedAt                             time.Time
+	DurationSeconds                                int64
+	TagIDs                                         []uuid.UUID
+	TagNames                                       []string
+	TicketIDs                                      []uuid.UUID
+	TicketReferences, TicketTitles                 []string
 }
 
 type timerEvent struct {
@@ -45,6 +47,7 @@ type reportRequest struct {
 	Location                *time.Location
 	Start, End, RangeEnd    time.Time
 	TargetUserID, ProjectID *uuid.UUID
+	TicketIDs               []uuid.UUID
 	TagIDs                  []uuid.UUID
 	Limit, Offset           int
 	GroupBy                 []string
@@ -230,6 +233,10 @@ func (handler Handler) parseRequest(writer http.ResponseWriter, request *http.Re
 	if !ok {
 		return reportRequest{}, false
 	}
+	ticketIDs, ok := parseFilterIDs(writer, query["ticketId"], "Ticket")
+	if !ok {
+		return reportRequest{}, false
+	}
 	tagIDs, ok := parseTagIDs(writer, query["tagId"])
 	if !ok {
 		return reportRequest{}, false
@@ -250,7 +257,7 @@ func (handler Handler) parseRequest(writer http.ResponseWriter, request *http.Re
 		respondError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "Date grouping must be day, week, or month.")
 		return reportRequest{}, false
 	}
-	return reportRequest{OrganizationID: organizationID, Scope: scope, Timezone: timezone, Location: location, Start: start, End: end, RangeEnd: end.AddDate(0, 0, 1), TargetUserID: targetUserID, ProjectID: projectID, TagIDs: tagIDs, Limit: limit, Offset: offset, GroupBy: groupBy, DateGrouping: dateGrouping}, true
+	return reportRequest{OrganizationID: organizationID, Scope: scope, Timezone: timezone, Location: location, Start: start, End: end, RangeEnd: end.AddDate(0, 0, 1), TargetUserID: targetUserID, ProjectID: projectID, TicketIDs: ticketIDs, TagIDs: tagIDs, Limit: limit, Offset: offset, GroupBy: groupBy, DateGrouping: dateGrouping}, true
 }
 
 func parseGroupBy(writer http.ResponseWriter, raw []string, scope string, required bool) ([]string, bool) {
@@ -285,12 +292,19 @@ func (handler Handler) loadEntries(request *http.Request, input reportRequest) (
 		arguments = append(arguments, *input.ProjectID)
 		filters = append(filters, fmt.Sprintf("te.project_id = $%d", len(arguments)))
 	}
+	if len(input.TicketIDs) > 0 {
+		arguments = append(arguments, input.TicketIDs)
+		filters = append(filters, fmt.Sprintf("EXISTS (SELECT 1 FROM time_entry_tickets selected_tickets WHERE selected_tickets.time_entry_id = te.id AND selected_tickets.ticket_id = ANY($%d))", len(arguments)))
+	}
 	if len(input.TagIDs) > 0 {
 		arguments = append(arguments, input.TagIDs)
 		filters = append(filters, fmt.Sprintf("EXISTS (SELECT 1 FROM time_entry_tags selected_tags WHERE selected_tags.time_entry_id = te.id AND selected_tags.tag_id = ANY($%d))", len(arguments)))
 	}
-	statement := `SELECT te.id, te.organization_id, te.user_id, u.name, te.project_id, p.name, te.source_type,
+	statement := `SELECT te.id, te.organization_id, te.user_id, u.name, te.project_id, p.name, te.description, te.source_type,
 		te.started_at, te.ended_at, te.duration_seconds,
+		ARRAY(SELECT ticket.id FROM time_entry_tickets teticket JOIN tickets ticket ON ticket.id = teticket.ticket_id WHERE teticket.time_entry_id = te.id ORDER BY ticket.reference),
+		ARRAY(SELECT ticket.reference FROM time_entry_tickets teticket JOIN tickets ticket ON ticket.id = teticket.ticket_id WHERE teticket.time_entry_id = te.id ORDER BY ticket.reference),
+		ARRAY(SELECT ticket.title FROM time_entry_tickets teticket JOIN tickets ticket ON ticket.id = teticket.ticket_id WHERE teticket.time_entry_id = te.id ORDER BY ticket.reference),
 		COALESCE(array_agg(t.id) FILTER (WHERE t.id IS NOT NULL), ARRAY[]::uuid[]),
 		COALESCE(array_agg(t.name) FILTER (WHERE t.id IS NOT NULL), ARRAY[]::text[])
 		FROM time_entries te JOIN users u ON u.id = te.user_id JOIN projects p ON p.id = te.project_id
@@ -304,7 +318,7 @@ func (handler Handler) loadEntries(request *http.Request, input reportRequest) (
 	entries := make([]reportEntry, 0)
 	for rows.Next() {
 		entry := reportEntry{TagIDs: make([]uuid.UUID, 0), TagNames: make([]string, 0)}
-		if err := rows.Scan(&entry.ID, &entry.OrganizationID, &entry.UserID, &entry.UserName, &entry.ProjectID, &entry.ProjectName, &entry.SourceType, &entry.StartedAt, &entry.EndedAt, &entry.DurationSeconds, &entry.TagIDs, &entry.TagNames); err != nil {
+		if err := rows.Scan(&entry.ID, &entry.OrganizationID, &entry.UserID, &entry.UserName, &entry.ProjectID, &entry.ProjectName, &entry.Description, &entry.SourceType, &entry.StartedAt, &entry.EndedAt, &entry.DurationSeconds, &entry.TicketIDs, &entry.TicketReferences, &entry.TicketTitles, &entry.TagIDs, &entry.TagNames); err != nil {
 			return nil, err
 		}
 		entries = append(entries, entry)
@@ -442,6 +456,15 @@ func valuesForDimension(entry reportEntry, localTime time.Time, dimension, dateG
 		return []groupValue{{Dimension: dimension, Key: entry.UserID.String(), Label: entry.UserName}}
 	case "project":
 		return []groupValue{{Dimension: dimension, Key: entry.ProjectID.String(), Label: entry.ProjectName}}
+	case "ticket":
+		if len(entry.TicketIDs) == 0 {
+			return []groupValue{{Dimension: dimension, Key: "no-ticket", Label: "No ticket"}}
+		}
+		values := make([]groupValue, len(entry.TicketIDs))
+		for index, id := range entry.TicketIDs {
+			values[index] = groupValue{Dimension: dimension, Key: id.String(), Label: entry.TicketReferences[index]}
+		}
+		return values
 	case "tag":
 		if len(entry.TagIDs) == 0 {
 			return []groupValue{{Dimension: dimension, Key: "untagged", Label: "Untagged"}}
@@ -481,10 +504,10 @@ func summarySortKey(row summaryRow) string {
 }
 
 func writeDetailedCSV(writer *csv.Writer, data reportData) {
-	_ = writer.Write([]string{"Member", "Project", "Tags", "Source", "Start", "End", "Duration seconds", "Duration"})
+	_ = writer.Write([]string{"Member", "Project", "Ticket", "Ticket title", "Description", "Tags", "Source", "Start", "End", "Duration seconds", "Duration"})
 	for _, entry := range data.Entries {
 		seconds := data.Duration[entry.ID]
-		_ = writer.Write([]string{entry.UserName, entry.ProjectName, strings.Join(entry.TagNames, ", "), entry.SourceType, entry.StartedAt.In(data.Request.Location).Format("2006-01-02 15:04:05 MST"), entry.EndedAt.In(data.Request.Location).Format("2006-01-02 15:04:05 MST"), strconv.FormatInt(seconds, 10), formatDuration(seconds)})
+		_ = writer.Write([]string{entry.UserName, entry.ProjectName, strings.Join(entry.TicketReferences, ", "), strings.Join(entry.TicketTitles, ", "), entry.Description, strings.Join(entry.TagNames, ", "), entry.SourceType, entry.StartedAt.In(data.Request.Location).Format("2006-01-02 15:04:05 MST"), entry.EndedAt.In(data.Request.Location).Format("2006-01-02 15:04:05 MST"), strconv.FormatInt(seconds, 10), formatDuration(seconds)})
 	}
 }
 
@@ -516,13 +539,17 @@ func parseDate(value string, fallback time.Time, location *time.Location) (time.
 }
 
 func parseTagIDs(writer http.ResponseWriter, raw []string) ([]uuid.UUID, bool) {
+	return parseFilterIDs(writer, raw, "Tag")
+}
+
+func parseFilterIDs(writer http.ResponseWriter, raw []string, name string) ([]uuid.UUID, bool) {
 	result := make([]uuid.UUID, 0, len(raw))
 	seen := make(map[uuid.UUID]bool)
 	for _, item := range raw {
 		for _, value := range strings.Split(item, ",") {
 			parsed, err := uuid.Parse(strings.TrimSpace(value))
 			if err != nil || parsed == uuid.Nil {
-				respondError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "Tag filters must contain valid identifiers.")
+				respondError(writer, http.StatusBadRequest, "VALIDATION_ERROR", name+" filters must contain valid identifiers.")
 				return nil, false
 			}
 			if !seen[parsed] {
@@ -593,7 +620,11 @@ func entryResponse(entry reportEntry, reportDuration int64) map[string]any {
 	for index, id := range entry.TagIDs {
 		tags = append(tags, map[string]any{"id": id, "name": entry.TagNames[index]})
 	}
-	return map[string]any{"id": entry.ID, "organizationId": entry.OrganizationID, "userId": entry.UserID, "userName": entry.UserName, "projectId": entry.ProjectID, "projectName": entry.ProjectName, "sourceType": entry.SourceType, "startedAt": entry.StartedAt, "endedAt": entry.EndedAt, "durationSeconds": entry.DurationSeconds, "reportDurationSeconds": reportDuration, "tags": tags}
+	tickets := make([]map[string]any, 0, len(entry.TicketIDs))
+	for index, id := range entry.TicketIDs {
+		tickets = append(tickets, map[string]any{"id": id, "reference": entry.TicketReferences[index], "title": entry.TicketTitles[index]})
+	}
+	return map[string]any{"id": entry.ID, "organizationId": entry.OrganizationID, "userId": entry.UserID, "userName": entry.UserName, "projectId": entry.ProjectID, "projectName": entry.ProjectName, "description": entry.Description, "sourceType": entry.SourceType, "startedAt": entry.StartedAt, "endedAt": entry.EndedAt, "durationSeconds": entry.DurationSeconds, "reportDurationSeconds": reportDuration, "tickets": tickets, "tags": tags}
 }
 
 func respond(writer http.ResponseWriter, status int, data any) {

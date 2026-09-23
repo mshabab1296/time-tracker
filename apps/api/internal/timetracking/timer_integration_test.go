@@ -61,13 +61,17 @@ func TestTimerStateFlowAndRetries(t *testing.T) {
 	}
 
 	handler := Handler{Database: pool}
-	startBody := `{"organizationId":"` + organizationID.String() + `","projectId":"` + projectID.String() + `","tagIds":["` + tagID.String() + `"]}`
+	missingDescription := `{"organizationId":"` + organizationID.String() + `","projectId":"` + projectID.String() + `","tagIds":[]}`
+	if rejected := invoke(t, handler.Start, http.MethodPost, missingDescription, rawSession, csrfToken); rejected.Code != http.StatusBadRequest {
+		t.Fatalf("timer without description status=%d body=%s", rejected.Code, rejected.Body.String())
+	}
+	startBody := `{"organizationId":"` + organizationID.String() + `","projectId":"` + projectID.String() + `","description":"Investigating the bug","tagIds":["` + tagID.String() + `"]}`
 	first := invoke(t, handler.Start, http.MethodPost, startBody, rawSession, csrfToken)
 	if first.Code != http.StatusCreated {
 		t.Fatalf("start status=%d body=%s", first.Code, first.Body.String())
 	}
 	active := decodeEntry(t, first)
-	if active.Data.Status != "RUNNING" || active.Data.ID == uuid.Nil {
+	if active.Data.Status != "RUNNING" || active.Data.ID == uuid.Nil || active.Data.Description != "Investigating the bug" {
 		t.Fatalf("start response was invalid: %#v", active)
 	}
 	refreshed := invokeAt(t, handler.Active, http.MethodGet, "/api/v1/timer?organizationId="+organizationID.String(), "", rawSession, "")
@@ -77,11 +81,11 @@ func TestTimerStateFlowAndRetries(t *testing.T) {
 	if retry := invoke(t, handler.Start, http.MethodPost, startBody, rawSession, csrfToken); retry.Code != http.StatusOK {
 		t.Fatalf("same start retry status=%d body=%s", retry.Code, retry.Body.String())
 	}
-	otherStart := `{"organizationId":"` + organizationID.String() + `","projectId":"` + otherProjectID.String() + `","tagIds":[]}`
+	otherStart := `{"organizationId":"` + organizationID.String() + `","projectId":"` + otherProjectID.String() + `","description":"Investigating the bug","tagIds":[]}`
 	if conflict := invoke(t, handler.Start, http.MethodPost, otherStart, rawSession, csrfToken); conflict.Code != http.StatusConflict {
 		t.Fatalf("different active start status=%d body=%s", conflict.Code, conflict.Body.String())
 	}
-	updateBody := `{"entryId":"` + active.Data.ID.String() + `","projectId":"` + otherProjectID.String() + `","tagIds":[]}`
+	updateBody := `{"entryId":"` + active.Data.ID.String() + `","projectId":"` + otherProjectID.String() + `","description":"Investigating the bug","tagIds":[]}`
 	if updated := invoke(t, handler.UpdateActive, http.MethodPatch, updateBody, rawSession, csrfToken); updated.Code != http.StatusOK || decodeEntry(t, updated).Data.Status != "RUNNING" {
 		t.Fatalf("update active timer status=%d body=%s", updated.Code, updated.Body.String())
 	}
@@ -116,18 +120,22 @@ func TestTimerStateFlowAndRetries(t *testing.T) {
 	}
 	manualStartedAt := time.Now().UTC().Add(-3 * time.Hour).Truncate(time.Minute)
 	manualEndedAt := manualStartedAt.Add(90 * time.Minute)
-	manualBody := fmt.Sprintf(`{"organizationId":"%s","projectId":"%s","tagIds":["%s"],"startedAt":"%s","endedAt":"%s"}`, organizationID, projectID, tagID, manualStartedAt.Format(time.RFC3339), manualEndedAt.Format(time.RFC3339))
+	missingManualDescription := fmt.Sprintf(`{"organizationId":"%s","projectId":"%s","tagIds":[],"startedAt":"%s","endedAt":"%s"}`, organizationID, projectID, manualStartedAt.Format(time.RFC3339), manualEndedAt.Format(time.RFC3339))
+	if rejected := invoke(t, handler.CreateManual, http.MethodPost, missingManualDescription, rawSession, csrfToken); rejected.Code != http.StatusBadRequest {
+		t.Fatalf("manual entry without description status=%d body=%s", rejected.Code, rejected.Body.String())
+	}
+	manualBody := fmt.Sprintf(`{"organizationId":"%s","projectId":"%s","description":"Reviewing the fix","tagIds":["%s"],"startedAt":"%s","endedAt":"%s"}`, organizationID, projectID, tagID, manualStartedAt.Format(time.RFC3339), manualEndedAt.Format(time.RFC3339))
 	manualRecorder := invoke(t, handler.CreateManual, http.MethodPost, manualBody, rawSession, csrfToken)
 	if manualRecorder.Code != http.StatusCreated {
 		t.Fatalf("manual entry status=%d body=%s", manualRecorder.Code, manualRecorder.Body.String())
 	}
 	durationStartedAt := manualEndedAt.Add(time.Minute)
-	durationBody := fmt.Sprintf(`{"organizationId":"%s","projectId":"%s","tagIds":[],"startedAt":"%s","durationMinutes":30}`, organizationID, projectID, durationStartedAt.Format(time.RFC3339))
+	durationBody := fmt.Sprintf(`{"organizationId":"%s","projectId":"%s","description":"Writing tests","tagIds":[],"startedAt":"%s","durationMinutes":30}`, organizationID, projectID, durationStartedAt.Format(time.RFC3339))
 	durationRecorder := invoke(t, handler.CreateManual, http.MethodPost, durationBody, rawSession, csrfToken)
 	if durationRecorder.Code != http.StatusCreated {
 		t.Fatalf("manual duration entry status=%d body=%s", durationRecorder.Code, durationRecorder.Body.String())
 	}
-	overlapBody := fmt.Sprintf(`{"organizationId":"%s","projectId":"%s","tagIds":[],"startedAt":"%s","durationMinutes":30}`, organizationID, projectID, manualStartedAt.Add(time.Minute).Format(time.RFC3339))
+	overlapBody := fmt.Sprintf(`{"organizationId":"%s","projectId":"%s","description":"Overlapping work","tagIds":[],"startedAt":"%s","durationMinutes":30}`, organizationID, projectID, manualStartedAt.Add(time.Minute).Format(time.RFC3339))
 	if overlapRecorder := invoke(t, handler.CreateManual, http.MethodPost, overlapBody, rawSession, csrfToken); overlapRecorder.Code != http.StatusConflict {
 		t.Fatalf("overlapping manual entry status=%d body=%s", overlapRecorder.Code, overlapRecorder.Body.String())
 	}
@@ -160,8 +168,9 @@ func TestTimerStateFlowAndRetries(t *testing.T) {
 
 type timerResponse struct {
 	Data struct {
-		ID     uuid.UUID `json:"id"`
-		Status string    `json:"status"`
+		ID          uuid.UUID `json:"id"`
+		Status      string    `json:"status"`
+		Description string    `json:"description"`
 	} `json:"data"`
 }
 

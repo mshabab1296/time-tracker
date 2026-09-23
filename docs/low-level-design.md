@@ -89,7 +89,7 @@ For completed time entries, PostgreSQL shall enforce non-overlap per user with a
 
 ### LLD-13 Foreign-key deletion behavior
 
-Foreign keys shall prevent deletion of a project or tag while an existing time entry references it. Cascading deletion is permitted for dependent join records such as `project_assignments` and `time_entry_tags` when their parent is deleted. Hard-deleting a time entry shall cascade-delete its timer events and tag links; its audit record remains as a non-foreign-key historical record.
+Foreign keys shall prevent deletion of a project, ticket, or tag while an existing time entry references it. Cascading deletion is permitted for dependent join records such as `project_assignments`, `time_entry_tags`, and `time_entry_tickets` when their parent entry is deleted. Hard-deleting a time entry shall cascade-delete its timer events, tag links, and ticket links; its audit record remains as a non-foreign-key historical record.
 
 
 
@@ -147,7 +147,7 @@ Each session shall store `last_seen_at` and `expires_at` to enforce 24-hour inac
 
 ### LLD-24 Organization consistency
 
-Each time entry shall store a direct `organization_id` foreign key in addition to `user_id` and `project_id`. Before saving an entry, the Go service shall transactionally verify that its user membership, project, tags, and organization all belong to the same organization.
+Each time entry shall store a direct `organization_id` foreign key in addition to `user_id` and `project_id`. Before saving an entry, the Go service shall transactionally verify that its user membership, project, optional tickets, tags, and organization all belong to the same organization.
 
 ## 10. Invitation Model
 
@@ -185,7 +185,7 @@ V1 shall not use an `Idempotency-Key` header or persisted request-result table. 
 
 ### LLD-31 Query indexes
 
-The `time_entries` table shall have indexes for `(organization_id, started_at)` and `(user_id, started_at)`. The `time_entry_tags` table shall have a tag-first index to support tag-filtered reports.
+The `time_entries` table shall have indexes for `(organization_id, started_at)` and `(user_id, started_at)`. The `time_entry_tags` table shall have a tag-first index to support tag-filtered reports. A ticket-first index on `time_entry_tickets(ticket_id, time_entry_id)` shall support ticket-filtered reports and deletion-reference checks.
 
 ### LLD-32 API pagination
 
@@ -243,4 +243,25 @@ In production, Kubernetes Ingress shall serve the frontend and `/api/v1` from th
 
 For paginated list responses, `data` shall contain the resource array and `meta` shall contain `limit`, `offset`, and `total`. For non-paginated responses, `meta` shall be an empty object.
 
+## 16. Ticket References
 
+### LLD-39 Ticket identity and scope
+
+The `tickets` table shall have an internal UUIDv7 primary key, `organization_id` and `created_by_user_id` foreign keys, required `reference` and `title`, and standard audit timestamps. The creator ID remains attached when their organization membership is removed. The ticket is organization-scoped, not a child of a TimeTracker project: a work item may be recorded under different TimeTracker projects without duplicating its ticket. V1 shall enforce case-insensitive reference uniqueness within an organization. Ticket references and titles shall be limited to 100 and 200 characters respectively.
+
+The internal ID is the stable foreign-key target. V1 shall not use a Jira key, URL, or provider ID as its primary key. A later integration may add a separate provider-connection and external-identity mapping keyed by `(provider, connection, external_id)`; this is deferred rather than storing Jira-specific columns in `tickets` now.
+If two external sources later use the same display reference, uniqueness may be expanded to provider/connection scope without changing internal ticket IDs or existing entry links.
+
+### LLD-40 Entry-ticket relationship
+
+`time_entry_tickets` shall link entries and tickets many-to-many with a unique `(time_entry_id, ticket_id)` pair. The database shall enforce that a linked ticket and entry have the same `organization_id` through composite foreign keys. The Go service shall validate this rule, reject duplicate selections, and cap selected tickets per entry for new and edited active/completed entries. `ON DELETE RESTRICT` shall protect linked tickets; deleting an entry shall cascade-delete its links, not its tickets. A forward migration shall copy existing nullable `time_entries.ticket_id` values into the join table before dropping that column.
+
+### LLD-41 Ticket API and search
+
+The versioned organization-scoped API shall expose a paginated ticket list/search and create, update, and delete operations. Search shall be case-insensitive, parameterized, organization-filtered, and limited to the maximum API page size. The picker shall request five recent tickets for an empty query and a bounded result set for a typed query; it shall not preload every ticket. Entry detail and list responses shall include enough selected-ticket data to show its reference and title without a catalog-wide fetch.
+
+The database shall index tickets by organization and recent creation order, and enforce the reference uniqueness rule. Further search indexing shall be chosen from observed query patterns rather than added speculatively. Ticket filtering shall use an `EXISTS` check on `time_entry_tickets` so detailed rows and overall totals are not duplicated. Ticket grouping shall place a multi-ticket entry in every matching ticket group; detailed exports shall include all ticket references and titles, and entries without tickets shall remain reportable.
+
+### LLD-42 Authorization and audit
+
+Ticket reads and selection require current organization membership. A Member may create tickets and edit or delete only tickets whose `created_by_user_id` matches their authenticated user ID, while they remain a member. An Admin may create, edit, or delete any ticket in their organization. The linked-entry deletion restriction applies to both roles. Ticket creation, edits, and deletion shall be audited with the existing audit mechanism. Authorization shall be checked by the Go service against current membership, role, and creator ID; ownership alone shall not grant access after membership removal.

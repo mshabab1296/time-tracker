@@ -15,18 +15,22 @@ const defaultCompletedEntryPageSize = 25
 const maximumCompletedEntryPageSize = 100
 
 type completedEntry struct {
-	ID              uuid.UUID
-	OrganizationID  uuid.UUID
-	UserID          uuid.UUID
-	UserName        string
-	ProjectID       uuid.UUID
-	ProjectName     string
-	SourceType      string
-	StartedAt       time.Time
-	EndedAt         time.Time
-	DurationSeconds int64
-	TagIDs          []uuid.UUID
-	TagNames        []string
+	ID               uuid.UUID
+	OrganizationID   uuid.UUID
+	UserID           uuid.UUID
+	UserName         string
+	ProjectID        uuid.UUID
+	ProjectName      string
+	TicketIDs        []uuid.UUID
+	TicketReferences []string
+	TicketTitles     []string
+	Description      string
+	SourceType       string
+	StartedAt        time.Time
+	EndedAt          time.Time
+	DurationSeconds  int64
+	TagIDs           []uuid.UUID
+	TagNames         []string
 }
 
 // ListCompleted returns an authorized, paginated list of completed entries in
@@ -145,8 +149,11 @@ func (handler Handler) CompletedDetail(writer http.ResponseWriter, request *http
 }
 
 const completedEntryQuery = `
-	SELECT te.id, te.organization_id, te.user_id, u.name, te.project_id, p.name, te.source_type,
+	SELECT te.id, te.organization_id, te.user_id, u.name, te.project_id, p.name, te.description, te.source_type,
 	       te.started_at, te.ended_at, te.duration_seconds,
+	       ARRAY(SELECT ticket.id FROM time_entry_tickets teticket JOIN tickets ticket ON ticket.id = teticket.ticket_id WHERE teticket.time_entry_id = te.id ORDER BY ticket.reference),
+	       ARRAY(SELECT ticket.reference FROM time_entry_tickets teticket JOIN tickets ticket ON ticket.id = teticket.ticket_id WHERE teticket.time_entry_id = te.id ORDER BY ticket.reference),
+	       ARRAY(SELECT ticket.title FROM time_entry_tickets teticket JOIN tickets ticket ON ticket.id = teticket.ticket_id WHERE teticket.time_entry_id = te.id ORDER BY ticket.reference),
 	       COALESCE(array_agg(t.id) FILTER (WHERE t.id IS NOT NULL), ARRAY[]::uuid[]),
 	       COALESCE(array_agg(t.name) FILTER (WHERE t.id IS NOT NULL), ARRAY[]::text[])
 	FROM time_entries te
@@ -161,15 +168,18 @@ type completedEntryScanner interface{ Scan(...any) error }
 
 func scanCompletedEntry(scanner completedEntryScanner) (completedEntry, error) {
 	entry := completedEntry{TagIDs: make([]uuid.UUID, 0), TagNames: make([]string, 0)}
-	err := scanner.Scan(&entry.ID, &entry.OrganizationID, &entry.UserID, &entry.UserName, &entry.ProjectID, &entry.ProjectName, &entry.SourceType, &entry.StartedAt, &entry.EndedAt, &entry.DurationSeconds, &entry.TagIDs, &entry.TagNames)
+	err := scanner.Scan(&entry.ID, &entry.OrganizationID, &entry.UserID, &entry.UserName, &entry.ProjectID, &entry.ProjectName, &entry.Description, &entry.SourceType, &entry.StartedAt, &entry.EndedAt, &entry.DurationSeconds, &entry.TicketIDs, &entry.TicketReferences, &entry.TicketTitles, &entry.TagIDs, &entry.TagNames)
 	return entry, err
 }
 
 func (handler Handler) loadCompletedEntry(request *http.Request, organizationID, entryID uuid.UUID) (completedEntry, bool, error) {
 	entry := completedEntry{TagIDs: make([]uuid.UUID, 0), TagNames: make([]string, 0)}
 	err := handler.Database.QueryRow(request.Context(), `
-		SELECT te.id, te.organization_id, te.user_id, u.name, te.project_id, p.name, te.source_type,
+		SELECT te.id, te.organization_id, te.user_id, u.name, te.project_id, p.name, te.description, te.source_type,
 		       te.started_at, te.ended_at, te.duration_seconds,
+		       ARRAY(SELECT ticket.id FROM time_entry_tickets teticket JOIN tickets ticket ON ticket.id = teticket.ticket_id WHERE teticket.time_entry_id = te.id ORDER BY ticket.reference),
+		       ARRAY(SELECT ticket.reference FROM time_entry_tickets teticket JOIN tickets ticket ON ticket.id = teticket.ticket_id WHERE teticket.time_entry_id = te.id ORDER BY ticket.reference),
+		       ARRAY(SELECT ticket.title FROM time_entry_tickets teticket JOIN tickets ticket ON ticket.id = teticket.ticket_id WHERE teticket.time_entry_id = te.id ORDER BY ticket.reference),
 		       COALESCE(array_agg(t.id) FILTER (WHERE t.id IS NOT NULL), ARRAY[]::uuid[]),
 		       COALESCE(array_agg(t.name) FILTER (WHERE t.id IS NOT NULL), ARRAY[]::text[])
 		FROM time_entries te
@@ -178,7 +188,7 @@ func (handler Handler) loadCompletedEntry(request *http.Request, organizationID,
 		LEFT JOIN time_entry_tags tet ON tet.time_entry_id = te.id
 		LEFT JOIN tags t ON t.id = tet.tag_id
 		WHERE te.organization_id = $1 AND te.id = $2 AND te.status = 'STOPPED'
-		GROUP BY te.id, u.name, p.name`, organizationID, entryID).Scan(&entry.ID, &entry.OrganizationID, &entry.UserID, &entry.UserName, &entry.ProjectID, &entry.ProjectName, &entry.SourceType, &entry.StartedAt, &entry.EndedAt, &entry.DurationSeconds, &entry.TagIDs, &entry.TagNames)
+		GROUP BY te.id, u.name, p.name`, organizationID, entryID).Scan(&entry.ID, &entry.OrganizationID, &entry.UserID, &entry.UserName, &entry.ProjectID, &entry.ProjectName, &entry.Description, &entry.SourceType, &entry.StartedAt, &entry.EndedAt, &entry.DurationSeconds, &entry.TicketIDs, &entry.TicketReferences, &entry.TicketTitles, &entry.TagIDs, &entry.TagNames)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return completedEntry{}, false, nil
@@ -193,7 +203,11 @@ func completedEntryResponse(entry completedEntry) map[string]any {
 	for index, tagID := range entry.TagIDs {
 		tags = append(tags, map[string]any{"id": tagID, "name": entry.TagNames[index]})
 	}
-	return map[string]any{"id": entry.ID, "organizationId": entry.OrganizationID, "userId": entry.UserID, "userName": entry.UserName, "projectId": entry.ProjectID, "projectName": entry.ProjectName, "sourceType": entry.SourceType, "startedAt": entry.StartedAt, "endedAt": entry.EndedAt, "durationSeconds": entry.DurationSeconds, "tags": tags}
+	tickets := make([]map[string]any, 0, len(entry.TicketIDs))
+	for index, id := range entry.TicketIDs {
+		tickets = append(tickets, map[string]any{"id": id, "reference": entry.TicketReferences[index], "title": entry.TicketTitles[index]})
+	}
+	return map[string]any{"id": entry.ID, "organizationId": entry.OrganizationID, "userId": entry.UserID, "userName": entry.UserName, "projectId": entry.ProjectID, "projectName": entry.ProjectName, "description": entry.Description, "sourceType": entry.SourceType, "startedAt": entry.StartedAt, "endedAt": entry.EndedAt, "durationSeconds": entry.DurationSeconds, "tickets": tickets, "tags": tags}
 }
 
 func organizationRole(request *http.Request, handler Handler, organizationID, userID uuid.UUID) (string, error) {

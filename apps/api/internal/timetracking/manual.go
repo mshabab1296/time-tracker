@@ -14,6 +14,8 @@ import (
 type createManualEntryRequest struct {
 	OrganizationID  uuid.UUID   `json:"organizationId"`
 	ProjectID       uuid.UUID   `json:"projectId"`
+	TicketIDs       []uuid.UUID `json:"ticketIds"`
+	Description     string      `json:"description"`
 	TagIDs          []uuid.UUID `json:"tagIds"`
 	StartedAt       time.Time   `json:"startedAt"`
 	EndedAt         *time.Time  `json:"endedAt"`
@@ -31,6 +33,7 @@ func (handler Handler) CreateManual(writer http.ResponseWriter, request *http.Re
 	if !decodeJSON(writer, request, &input) || !validManualInput(writer, input) {
 		return
 	}
+	input.Description, _ = normalizedDescription(input.Description)
 	var endedAt time.Time
 	if input.DurationMinutes != nil {
 		endedAt = input.StartedAt.Add(time.Duration(*input.DurationMinutes) * time.Minute)
@@ -53,8 +56,8 @@ func (handler Handler) CreateManual(writer http.ResponseWriter, request *http.Re
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to create the manual entry.")
 		return
 	}
-	if !validateSelection(request, tx, userID, input.OrganizationID, input.ProjectID, input.TagIDs) {
-		respondError(writer, http.StatusForbidden, "INVALID_ENTRY_SELECTION", "Select an assigned project and tags from the same organization.")
+	if !validateSelection(request, tx, userID, input.OrganizationID, input.ProjectID, input.TagIDs) || !validTicketSelection(request, tx, input.OrganizationID, input.TicketIDs) {
+		respondError(writer, http.StatusForbidden, "INVALID_ENTRY_SELECTION", "Select an assigned project, tickets, and tags from the same organization.")
 		return
 	}
 	overlaps, err := entryOverlaps(request, tx, userID, input.StartedAt, endedAt)
@@ -70,8 +73,8 @@ func (handler Handler) CreateManual(writer http.ResponseWriter, request *http.Re
 	entryID := uuid.Must(uuid.NewV7())
 	durationSeconds := int64(endedAt.Sub(input.StartedAt).Seconds())
 	_, err = tx.Exec(request.Context(), `
-		INSERT INTO time_entries (id, organization_id, user_id, project_id, source_type, status, started_at, ended_at, duration_seconds)
-		VALUES ($1, $2, $3, $4, 'MANUAL', 'STOPPED', $5, $6, $7)`, entryID, input.OrganizationID, userID, input.ProjectID, input.StartedAt, endedAt, durationSeconds)
+		INSERT INTO time_entries (id, organization_id, user_id, project_id, description, source_type, status, started_at, ended_at, duration_seconds)
+		VALUES ($1, $2, $3, $4, $5, 'MANUAL', 'STOPPED', $6, $7, $8)`, entryID, input.OrganizationID, userID, input.ProjectID, input.Description, input.StartedAt, endedAt, durationSeconds)
 	if isOverlapConstraintViolation(err) {
 		respondError(writer, http.StatusConflict, "TIME_ENTRY_OVERLAP", "This entry overlaps an existing time entry.")
 		return
@@ -84,6 +87,10 @@ func (handler Handler) CreateManual(writer http.ResponseWriter, request *http.Re
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to create the manual entry.")
 		return
 	}
+	if err := replaceTickets(request, tx, input.OrganizationID, entryID, input.TicketIDs); err != nil {
+		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to create the manual entry.")
+		return
+	}
 	if err := auditTimeEntry(request, tx, input.OrganizationID, userID, "TIME_ENTRY_CREATED", entryID); err != nil {
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to create the manual entry.")
 		return
@@ -92,12 +99,13 @@ func (handler Handler) CreateManual(writer http.ResponseWriter, request *http.Re
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to create the manual entry.")
 		return
 	}
-	respond(writer, http.StatusCreated, map[string]any{"id": entryID, "organizationId": input.OrganizationID, "projectId": input.ProjectID, "tagIds": input.TagIDs, "sourceType": "MANUAL", "status": "STOPPED", "startedAt": input.StartedAt, "endedAt": endedAt, "durationSeconds": durationSeconds})
+	respond(writer, http.StatusCreated, map[string]any{"id": entryID, "organizationId": input.OrganizationID, "projectId": input.ProjectID, "ticketIds": append([]uuid.UUID{}, input.TicketIDs...), "description": input.Description, "tagIds": input.TagIDs, "sourceType": "MANUAL", "status": "STOPPED", "startedAt": input.StartedAt, "endedAt": endedAt, "durationSeconds": durationSeconds})
 }
 
 func validManualInput(writer http.ResponseWriter, input createManualEntryRequest) bool {
-	if input.OrganizationID == uuid.Nil || input.ProjectID == uuid.Nil || input.StartedAt.IsZero() || !validTagIDs(input.TagIDs) || (input.EndedAt == nil && input.DurationMinutes == nil) || (input.EndedAt != nil && input.DurationMinutes != nil) {
-		respondError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "Provide an organization, assigned project, tags, start time, and either end time or duration.")
+	_, descriptionValid := normalizedDescription(input.Description)
+	if input.OrganizationID == uuid.Nil || input.ProjectID == uuid.Nil || input.StartedAt.IsZero() || !validTagIDs(input.TagIDs) || !validTicketIDs(input.TicketIDs) || !descriptionValid || (input.EndedAt == nil && input.DurationMinutes == nil) || (input.EndedAt != nil && input.DurationMinutes != nil) {
+		respondError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "Provide an organization, assigned project, task description (up to 200 characters), tags, start time, and either end time or duration.")
 		return false
 	}
 	if input.StartedAt.Second() != 0 || input.StartedAt.Nanosecond() != 0 || (input.EndedAt != nil && (input.EndedAt.Second() != 0 || input.EndedAt.Nanosecond() != 0)) || (input.DurationMinutes != nil && *input.DurationMinutes <= 0) {

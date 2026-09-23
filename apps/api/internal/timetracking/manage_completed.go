@@ -10,10 +10,12 @@ import (
 )
 
 type updateCompletedEntryRequest struct {
-	ProjectID uuid.UUID   `json:"projectId"`
-	TagIDs    []uuid.UUID `json:"tagIds"`
-	StartedAt *time.Time  `json:"startedAt"`
-	EndedAt   *time.Time  `json:"endedAt"`
+	ProjectID   uuid.UUID   `json:"projectId"`
+	TicketIDs   []uuid.UUID `json:"ticketIds"`
+	Description *string     `json:"description"`
+	TagIDs      []uuid.UUID `json:"tagIds"`
+	StartedAt   *time.Time  `json:"startedAt"`
+	EndedAt     *time.Time  `json:"endedAt"`
 }
 
 type editableCompletedEntry struct {
@@ -21,6 +23,7 @@ type editableCompletedEntry struct {
 	OrganizationID uuid.UUID
 	UserID         uuid.UUID
 	ProjectID      uuid.UUID
+	Description    string
 	SourceType     string
 	StartedAt      time.Time
 	EndedAt        time.Time
@@ -44,7 +47,7 @@ func (handler Handler) UpdateCompleted(writer http.ResponseWriter, request *http
 		return
 	}
 	var input updateCompletedEntryRequest
-	if !decodeJSON(writer, request, &input) || input.ProjectID == uuid.Nil || !validTagIDs(input.TagIDs) || (input.StartedAt == nil) != (input.EndedAt == nil) {
+	if !decodeJSON(writer, request, &input) || input.ProjectID == uuid.Nil || !validTagIDs(input.TagIDs) || !validTicketIDs(input.TicketIDs) || (input.StartedAt == nil) != (input.EndedAt == nil) {
 		respondError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "Provide a project, valid tags, and both start/end values when changing time.")
 		return
 	}
@@ -67,9 +70,18 @@ func (handler Handler) UpdateCompleted(writer http.ResponseWriter, request *http
 		respondError(writer, http.StatusForbidden, "FORBIDDEN", "You cannot update this completed entry.")
 		return
 	}
-	if !lockUser(request, tx, entry.UserID) || !validateSelection(request, tx, entry.UserID, organizationID, input.ProjectID, input.TagIDs) {
-		respondError(writer, http.StatusForbidden, "INVALID_ENTRY_SELECTION", "Select an assigned project and tags from the same organization.")
+	if !lockUser(request, tx, entry.UserID) || !validateSelection(request, tx, entry.UserID, organizationID, input.ProjectID, input.TagIDs) || !validTicketSelection(request, tx, organizationID, input.TicketIDs) {
+		respondError(writer, http.StatusForbidden, "INVALID_ENTRY_SELECTION", "Select an assigned project, tickets, and tags from the same organization.")
 		return
+	}
+	description := entry.Description
+	if input.Description != nil {
+		var valid bool
+		description, valid = normalizedDescription(*input.Description)
+		if !valid {
+			respondError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "Task description is required and must be 200 characters or fewer.")
+			return
+		}
 	}
 	startedAt, endedAt := entry.StartedAt, entry.EndedAt
 	if input.StartedAt != nil {
@@ -93,12 +105,12 @@ func (handler Handler) UpdateCompleted(writer http.ResponseWriter, request *http
 		}
 	}
 	durationSeconds := int64(endedAt.Sub(startedAt).Seconds())
-	_, err = tx.Exec(request.Context(), `UPDATE time_entries SET project_id = $1, started_at = $2, ended_at = $3, duration_seconds = $4, updated_at = CURRENT_TIMESTAMP WHERE id = $5`, input.ProjectID, startedAt, endedAt, durationSeconds, entry.ID)
+	_, err = tx.Exec(request.Context(), `UPDATE time_entries SET project_id = $1, description = $2, started_at = $3, ended_at = $4, duration_seconds = $5, updated_at = CURRENT_TIMESTAMP WHERE id = $6`, input.ProjectID, description, startedAt, endedAt, durationSeconds, entry.ID)
 	if isOverlapConstraintViolation(err) {
 		respondError(writer, http.StatusConflict, "TIME_ENTRY_OVERLAP", "This entry overlaps an existing time entry.")
 		return
 	}
-	if err != nil || replaceTags(request, tx, entry.ID, input.TagIDs) != nil || auditTimeEntry(request, tx, organizationID, actorID, "TIME_ENTRY_UPDATED", entry.ID) != nil {
+	if err != nil || replaceTags(request, tx, entry.ID, input.TagIDs) != nil || replaceTickets(request, tx, organizationID, entry.ID, input.TicketIDs) != nil || auditTimeEntry(request, tx, organizationID, actorID, "TIME_ENTRY_UPDATED", entry.ID) != nil {
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to update the completed entry.")
 		return
 	}
@@ -106,7 +118,7 @@ func (handler Handler) UpdateCompleted(writer http.ResponseWriter, request *http
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to update the completed entry.")
 		return
 	}
-	respond(writer, http.StatusOK, map[string]any{"id": entry.ID, "projectId": input.ProjectID, "tagIds": input.TagIDs, "startedAt": startedAt, "endedAt": endedAt, "durationSeconds": durationSeconds})
+	respond(writer, http.StatusOK, map[string]any{"id": entry.ID, "projectId": input.ProjectID, "ticketIds": append([]uuid.UUID{}, input.TicketIDs...), "description": description, "tagIds": input.TagIDs, "startedAt": startedAt, "endedAt": endedAt, "durationSeconds": durationSeconds})
 }
 
 // DeleteCompleted permanently deletes a completed entry. Database cascades
@@ -161,7 +173,7 @@ func (handler Handler) DeleteCompleted(writer http.ResponseWriter, request *http
 
 func loadEditableCompletedEntry(request *http.Request, tx pgx.Tx, organizationID, entryID uuid.UUID) (editableCompletedEntry, bool, error) {
 	entry := editableCompletedEntry{}
-	err := tx.QueryRow(request.Context(), `SELECT id, organization_id, user_id, project_id, source_type, started_at, ended_at FROM time_entries WHERE id = $1 AND organization_id = $2 AND status = 'STOPPED' FOR UPDATE`, entryID, organizationID).Scan(&entry.ID, &entry.OrganizationID, &entry.UserID, &entry.ProjectID, &entry.SourceType, &entry.StartedAt, &entry.EndedAt)
+	err := tx.QueryRow(request.Context(), `SELECT id, organization_id, user_id, project_id, description, source_type, started_at, ended_at FROM time_entries WHERE id = $1 AND organization_id = $2 AND status = 'STOPPED' FOR UPDATE`, entryID, organizationID).Scan(&entry.ID, &entry.OrganizationID, &entry.UserID, &entry.ProjectID, &entry.Description, &entry.SourceType, &entry.StartedAt, &entry.EndedAt)
 	if err == pgx.ErrNoRows {
 		return editableCompletedEntry{}, false, nil
 	}

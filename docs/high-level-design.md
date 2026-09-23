@@ -19,15 +19,19 @@ PostgreSQL
 
 The frontend shall be a separate React and TypeScript application. It shall communicate with the backend only through the versioned `/api/v1` interface.
 
-The frontend is responsible for user-facing workflows, including authentication screens, organization selection, timer controls, time-entry management, reports, and CSV download.
+The frontend is responsible for user-facing workflows, including authentication screens, organization selection, timer controls, ticket search and management, time-entry management, reports, and CSV download. Ticket pickers shall query the API for a small result set rather than load the entire organization catalog.
 
 ## 3. Backend
 
-The backend shall be a Go modular monolith. It shall expose the versioned HTTP API, enforce authentication and authorization, implement the time-tracking domain rules, and provide reporting and export capabilities.
+The backend shall be a Go modular monolith. It shall expose the versioned HTTP API, enforce authentication and authorization, implement the time-tracking and ticket-reference domain rules, and provide reporting and export capabilities. Ticket records and search shall remain a provider-neutral module; Jira and other board synchronization are later integrations, not part of V1.
 
 ## 4. Primary Datastore
 
-PostgreSQL shall be the primary relational datastore for V1. It shall store transactional application data, including users, organizations, memberships, projects, tags, time entries, timer events, invitations, and audit records.
+PostgreSQL shall be the primary relational datastore for V1. It shall store transactional application data, including users, organizations, memberships, projects, tickets, tags, time entries, timer events, invitations, and audit records. Entries and organization-owned tickets have a many-to-many relationship through an entry-ticket join table. Tickets and tags are separate dimensions in reporting.
+
+The TimeTracker ticket ID shall be an internal identifier, independent of a Jira issue key or any other provider's identifier. A later integration may add provider connections and external-identity mappings without replacing existing ticket IDs or time-entry links.
+
+Ticket ownership shall be recorded separately from organization membership. Members may manage tickets they created while they remain members; Admins may manage all tickets in their organization. Removing a Member shall not remove their tickets or historical entry links.
 
 ## 5. Authentication and Sessions
 

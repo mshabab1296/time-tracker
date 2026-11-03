@@ -3,7 +3,7 @@ import { EntryDetailModal } from './EntryDetailModal'
 import type { useEntryDetail } from './useEntryDetail'
 
 export function EntryDetailDialog({ detail }: { detail: ReturnType<typeof useEntryDetail> }) {
-  const { user, isAdmin, organizationID, projects, tags } = useWorkspace()
+  const { user, organizationID, projects, tags } = useWorkspace()
   const entry = detail.entryDetail
   if (!entry) return null
 
@@ -15,7 +15,7 @@ export function EntryDetailDialog({ detail }: { detail: ReturnType<typeof useEnt
       projects={projects}
       tags={tags}
       organizationID={organizationID}
-      canManage={isAdmin || entry.userId === user.id}
+      canManage={entry.userId === user.id}
       onClose={detail.closeEntryDetail}
       onSave={(input) => void detail.saveCompletedEntry(input)}
       onSaveEvents={(events) => void detail.saveTimerEvents(events)}

@@ -16,7 +16,9 @@ func TestValidateCompletedTimerEvents(t *testing.T) {
 	}{
 		{"start and stop", []timerEvent{{Type: "START", At: start}, {Type: "STOP", At: start.Add(time.Hour)}}, true, 3600},
 		{"pause pair", []timerEvent{{Type: "START", At: start}, {Type: "PAUSE", At: start.Add(20 * time.Minute)}, {Type: "RESUME", At: start.Add(40 * time.Minute)}, {Type: "STOP", At: start.Add(time.Hour)}}, true, 2400},
-		{"missing resume", []timerEvent{{Type: "START", At: start}, {Type: "PAUSE", At: start.Add(20 * time.Minute)}, {Type: "STOP", At: start.Add(time.Hour)}}, false, 0},
+		{"stop while paused", []timerEvent{{Type: "START", At: start}, {Type: "PAUSE", At: start.Add(20 * time.Minute)}, {Type: "STOP", At: start.Add(time.Hour)}}, true, 1200},
+		{"stop after two pauses", []timerEvent{{Type: "START", At: start}, {Type: "PAUSE", At: start.Add(20 * time.Minute)}, {Type: "RESUME", At: start.Add(40 * time.Minute)}, {Type: "PAUSE", At: start.Add(50 * time.Minute)}, {Type: "STOP", At: start.Add(time.Hour)}}, true, 1800},
+		{"repeated pause", []timerEvent{{Type: "START", At: start}, {Type: "PAUSE", At: start.Add(20 * time.Minute)}, {Type: "PAUSE", At: start.Add(30 * time.Minute)}, {Type: "STOP", At: start.Add(time.Hour)}}, false, 0},
 		{"wrong pair order", []timerEvent{{Type: "START", At: start}, {Type: "RESUME", At: start.Add(20 * time.Minute)}, {Type: "PAUSE", At: start.Add(40 * time.Minute)}, {Type: "STOP", At: start.Add(time.Hour)}}, false, 0},
 		{"non chronological", []timerEvent{{Type: "START", At: start}, {Type: "STOP", At: start}}, false, 0},
 		{"future", []timerEvent{{Type: "START", At: start}, {Type: "STOP", At: now.Add(time.Minute)}}, false, 0},

@@ -6,14 +6,14 @@ export function duration(seconds: number) {
 export function hoursMinutes(seconds: number) {
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
 }
-export function dateInTimezone(timezone: string) {
+export function dateInTimezone(timezone: string, date = new Date()) {
   const values = new Intl.DateTimeFormat('en-US', {
     timeZone: timezone,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
   })
-    .formatToParts(new Date())
+    .formatToParts(date)
     .reduce<Record<string, string>>((result, part) => ({ ...result, [part.type]: part.value }), {})
   return `${values.year}-${values.month}-${values.day}`
 }
@@ -41,6 +41,20 @@ export function firstDayOfMonth() {
 }
 export function reportDateTime(value: string, timezone: string) {
   return new Date(value).toLocaleString([], { timeZone: timezone })
+}
+export function entryDateTime(value: string, timezone: string) {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: timezone,
+    day: 'numeric',
+    month: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  })
+    .format(new Date(value))
+    .replace(/\b(am|pm)\b/g, (period) => period.toUpperCase())
 }
 export function displayDate(date: string) {
   const [year, month, day] = date.split('-').map(Number)

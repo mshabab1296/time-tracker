@@ -1,9 +1,11 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { useNavigate } from 'react-router'
 import { api } from '../../api/client'
 import type { Organization, User } from '../../types/domain'
 import { useWorkspace } from '../dashboard/WorkspaceContext'
 
 export function useSettings() {
+  const navigate = useNavigate()
   const {
     user,
     setUser,
@@ -50,6 +52,7 @@ export function useSettings() {
 
   async function createOrganization(event: FormEvent) {
     event.preventDefault()
+    const wasFirstOrganization = !organization
     const result = await api<Organization>('/organizations', {
       method: 'POST',
       body: JSON.stringify({
@@ -63,6 +66,7 @@ export function useSettings() {
       await loadOrganizations()
       selectOrganization(result.data.id)
       setMessage('Organization created.')
+      if (wasFirstOrganization) navigate('/tracker')
     }
   }
   useEffect(() => {

@@ -19,14 +19,15 @@ type updateCompletedEntryRequest struct {
 }
 
 type editableCompletedEntry struct {
-	ID             uuid.UUID
-	OrganizationID uuid.UUID
-	UserID         uuid.UUID
-	ProjectID      uuid.UUID
-	Description    string
-	SourceType     string
-	StartedAt      time.Time
-	EndedAt        time.Time
+	ID              uuid.UUID
+	OrganizationID  uuid.UUID
+	UserID          uuid.UUID
+	ProjectID       uuid.UUID
+	Description     string
+	SourceType      string
+	StartedAt       time.Time
+	EndedAt         time.Time
+	DurationSeconds int64
 }
 
 // UpdateCompleted changes a completed entry's project and tags. Manual entries
@@ -66,7 +67,7 @@ func (handler Handler) UpdateCompleted(writer http.ResponseWriter, request *http
 		respondError(writer, http.StatusNotFound, "TIME_ENTRY_NOT_FOUND", "Completed entry not found.")
 		return
 	}
-	if !canManageCompletedEntry(request, tx, organizationID, actorID, entry.UserID) {
+	if !canManageCompletedEntry(actorID, entry.UserID) {
 		respondError(writer, http.StatusForbidden, "FORBIDDEN", "You cannot update this completed entry.")
 		return
 	}
@@ -104,7 +105,10 @@ func (handler Handler) UpdateCompleted(writer http.ResponseWriter, request *http
 			return
 		}
 	}
-	durationSeconds := int64(endedAt.Sub(startedAt).Seconds())
+	durationSeconds := entry.DurationSeconds
+	if entry.SourceType == "MANUAL" {
+		durationSeconds = int64(endedAt.Sub(startedAt).Seconds())
+	}
 	_, err = tx.Exec(request.Context(), `UPDATE time_entries SET project_id = $1, description = $2, started_at = $3, ended_at = $4, duration_seconds = $5, updated_at = CURRENT_TIMESTAMP WHERE id = $6`, input.ProjectID, description, startedAt, endedAt, durationSeconds, entry.ID)
 	if isOverlapConstraintViolation(err) {
 		respondError(writer, http.StatusConflict, "TIME_ENTRY_OVERLAP", "This entry overlaps an existing time entry.")
@@ -152,7 +156,7 @@ func (handler Handler) DeleteCompleted(writer http.ResponseWriter, request *http
 		respondError(writer, http.StatusNotFound, "TIME_ENTRY_NOT_FOUND", "Completed entry not found.")
 		return
 	}
-	if !canManageCompletedEntry(request, tx, organizationID, actorID, entry.UserID) || !lockUser(request, tx, entry.UserID) {
+	if !canManageCompletedEntry(actorID, entry.UserID) || !lockUser(request, tx, entry.UserID) {
 		respondError(writer, http.StatusForbidden, "FORBIDDEN", "You cannot delete this completed entry.")
 		return
 	}
@@ -173,7 +177,7 @@ func (handler Handler) DeleteCompleted(writer http.ResponseWriter, request *http
 
 func loadEditableCompletedEntry(request *http.Request, tx pgx.Tx, organizationID, entryID uuid.UUID) (editableCompletedEntry, bool, error) {
 	entry := editableCompletedEntry{}
-	err := tx.QueryRow(request.Context(), `SELECT id, organization_id, user_id, project_id, description, source_type, started_at, ended_at FROM time_entries WHERE id = $1 AND organization_id = $2 AND status = 'STOPPED' FOR UPDATE`, entryID, organizationID).Scan(&entry.ID, &entry.OrganizationID, &entry.UserID, &entry.ProjectID, &entry.Description, &entry.SourceType, &entry.StartedAt, &entry.EndedAt)
+	err := tx.QueryRow(request.Context(), `SELECT id, organization_id, user_id, project_id, description, source_type, started_at, ended_at, duration_seconds FROM time_entries WHERE id = $1 AND organization_id = $2 AND status = 'STOPPED' FOR UPDATE`, entryID, organizationID).Scan(&entry.ID, &entry.OrganizationID, &entry.UserID, &entry.ProjectID, &entry.Description, &entry.SourceType, &entry.StartedAt, &entry.EndedAt, &entry.DurationSeconds)
 	if err == pgx.ErrNoRows {
 		return editableCompletedEntry{}, false, nil
 	}
@@ -183,12 +187,8 @@ func loadEditableCompletedEntry(request *http.Request, tx pgx.Tx, organizationID
 	return entry, true, nil
 }
 
-func canManageCompletedEntry(request *http.Request, tx pgx.Tx, organizationID, actorID, ownerID uuid.UUID) bool {
-	if actorID == ownerID {
-		return true
-	}
-	var role string
-	return tx.QueryRow(request.Context(), `SELECT role FROM memberships WHERE organization_id = $1 AND user_id = $2`, organizationID, actorID).Scan(&role) == nil && role == "ADMIN"
+func canManageCompletedEntry(actorID, ownerID uuid.UUID) bool {
+	return actorID == ownerID
 }
 
 func validManualTimestamp(value time.Time) bool {

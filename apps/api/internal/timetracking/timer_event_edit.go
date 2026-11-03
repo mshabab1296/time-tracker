@@ -45,7 +45,7 @@ func (handler Handler) UpdateTimerEvents(writer http.ResponseWriter, request *ht
 	}
 	durationSeconds, valid := validateCompletedTimerEvents(events, time.Now().UTC())
 	if !valid {
-		respondError(writer, http.StatusBadRequest, "INVALID_TIMER_EVENTS", "Timer events must be chronological and follow START, optional PAUSE/RESUME pairs, then STOP.")
+		respondError(writer, http.StatusBadRequest, "INVALID_TIMER_EVENTS", "Timer events must be chronological and follow START, optional PAUSE/RESUME transitions, then STOP.")
 		return
 	}
 
@@ -68,7 +68,7 @@ func (handler Handler) UpdateTimerEvents(writer http.ResponseWriter, request *ht
 		respondError(writer, http.StatusBadRequest, "INVALID_ENTRY_TYPE", "Only timer-generated entries have timer events.")
 		return
 	}
-	if !canManageCompletedEntry(request, tx, organizationID, actorID, entry.UserID) {
+	if !canManageCompletedEntry(actorID, entry.UserID) {
 		respondError(writer, http.StatusForbidden, "FORBIDDEN", "You cannot update this timer history.")
 		return
 	}
@@ -117,21 +117,11 @@ func (handler Handler) UpdateTimerEvents(writer http.ResponseWriter, request *ht
 }
 
 func validateCompletedTimerEvents(events []timerEvent, now time.Time) (int64, bool) {
-	if len(events) < 2 || len(events) > maximumCompletedTimerEvents || len(events)%2 != 0 || events[0].Type != "START" || events[len(events)-1].Type != "STOP" {
+	if len(events) < 2 || len(events) > maximumCompletedTimerEvents || events[0].Type != "START" || events[len(events)-1].Type != "STOP" {
 		return 0, false
 	}
 	for index, event := range events {
 		if event.At.IsZero() || event.At.After(now) || (index > 0 && !event.At.After(events[index-1].At)) {
-			return 0, false
-		}
-		if index == 0 || index == len(events)-1 {
-			continue
-		}
-		expected := "PAUSE"
-		if index%2 == 0 {
-			expected = "RESUME"
-		}
-		if event.Type != expected {
 			return 0, false
 		}
 	}

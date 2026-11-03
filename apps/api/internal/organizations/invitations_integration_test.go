@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,5 +95,23 @@ func TestInvitationCanBeCreatedResentAndCancelled(t *testing.T) {
 	var status string
 	if err := pool.QueryRow(context.Background(), `SELECT status FROM invitations WHERE id = $1`, invitationID).Scan(&status); err != nil || status != "CANCELLED" {
 		t.Fatalf("invitation status=%q err=%v", status, err)
+	}
+	// Exercise the decision response and audit spelling, not only DB status.
+	if _, err := pool.Exec(context.Background(), `UPDATE invitations SET status='PENDING',email=(SELECT email FROM users WHERE id=$2) WHERE id=$1`, invitationID, adminID); err != nil {
+		t.Fatal(err)
+	}
+	declineRequest := httptest.NewRequest(http.MethodPost, "/api/v1/invitations/placeholder/decline", nil)
+	declineRequest.SetPathValue("invitationID", invitationID.String())
+	declineRequest.SetPathValue("decision", "decline")
+	declineRequest.Header.Set("X-CSRF-Token", csrfToken)
+	declineRequest.AddCookie(&http.Cookie{Name: "timetracker_session", Value: rawSession})
+	declineRecorder := httptest.NewRecorder()
+	InvitationDecisionHandler{Database: pool}.ServeHTTP(declineRecorder, declineRequest)
+	if declineRecorder.Code != http.StatusOK || !strings.Contains(declineRecorder.Body.String(), `"status":"DECLINED"`) {
+		t.Fatalf("decline contract: %d %s", declineRecorder.Code, declineRecorder.Body.String())
+	}
+	var auditCount int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM audit_logs WHERE organization_id=$1 AND action='INVITATION_DECLINED'`, organizationID).Scan(&auditCount); err != nil || auditCount != 1 {
+		t.Fatalf("decline audit count=%d err=%v", auditCount, err)
 	}
 }

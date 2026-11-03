@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react'
 import { useTracker } from './useTracker'
-import { duration, hoursMinutes, weekDay, displayDate } from '../../utils/time'
+import { dateInTimezone, duration, hoursMinutes, weekDay, displayDate } from '../../utils/time'
 import { IconButton } from '../../components/ui/IconButton'
 import { ModalHeader } from '../../components/ui/ModalHeader'
+import { Modal } from '../../components/ui/Modal'
 import { ModalFooter } from '../../components/ui/ModalFooter'
 import { TagMultiSelect } from '../../components/ui/TagMultiSelect'
 import { SingleSelect } from '../../components/ui/SingleSelect'
@@ -13,6 +13,8 @@ import { TicketPicker } from '../tickets/TicketPicker'
 
 export function TrackerPage() {
   const {
+    readOnly,
+    selectedTimezone,
     timer,
     elapsed,
     activeOrganization,
@@ -66,38 +68,7 @@ export function TrackerPage() {
     toggleManualTag,
   } = useTracker()
   const detail = useEntryDetail()
-  const manualDialogRef = useRef<HTMLElement>(null)
-
-  useEffect(() => {
-    if (!manualFormOpen) return
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        setManualFormOpen(false)
-        return
-      }
-      if (event.key !== 'Tab') return
-      const controls = manualDialogRef.current?.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])',
-      )
-      if (!controls?.length) return
-      const first = controls[0]
-      const last = controls[controls.length - 1]
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault()
-        last.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault()
-        first.focus()
-      }
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.body.style.overflow = previousOverflow
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [manualFormOpen, setManualFormOpen])
+  const activeProjectName = projects.find((project) => project.id === timer?.projectId)?.name
 
   return (
     <div className="tracker-page">
@@ -106,72 +77,110 @@ export function TrackerPage() {
           <div>
             <p className="timer-status">
               <span className={`status-dot ${timer.status === 'RUNNING' ? 'running' : ''}`} />
-              {timer.status === 'RUNNING' ? 'Timer running' : 'Timer paused'}
             </p>
             <strong>{duration(elapsed)}</strong>
-            <span>{timer.description}</span>
-            <small>{activeOrganization?.name ?? 'Active workspace'}</small>
+            <span>
+              {timer.ticketReferences?.length ? `${timer.ticketReferences.join(', ')}: ` : ''}
+              {timer.description}
+            </span>
+            <small>
+              {activeOrganization?.name ?? 'Active workspace'}
+              {activeProjectName && ` · ${activeProjectName}`}
+            </small>
           </div>
           <div className="timer-actions">
             <button
               type="button"
               className="secondary"
-              aria-label="Edit timer details"
-              title="Edit timer details"
+              aria-label={readOnly ? 'View timer details' : 'Edit timer details'}
+              title={readOnly ? 'View timer details' : 'Edit timer details'}
               aria-expanded={timerFormOpen}
               onClick={() => setTimerFormOpen((value) => !value)}
               disabled={timer.organizationId !== organizationID}
             >
-              <TimerControlIcon name="edit" />
+              <TimerControlIcon name={readOnly ? 'view' : 'edit'} />
             </button>
-            {timer.status === 'RUNNING' ? (
+            {!readOnly &&
+              (timer.status === 'RUNNING' ? (
+                <button
+                  type="button"
+                  aria-label="Pause timer"
+                  title="Pause timer"
+                  onClick={() => void timerAction('pause')}
+                  disabled={busy}
+                >
+                  <TimerControlIcon name="pause" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  aria-label="Resume timer"
+                  title="Resume timer"
+                  onClick={() => void timerAction('resume')}
+                  disabled={busy}
+                >
+                  <TimerControlIcon name="play" />
+                </button>
+              ))}
+            {!readOnly && (
               <button
                 type="button"
-                aria-label="Pause timer"
-                title="Pause timer"
-                onClick={() => void timerAction('pause')}
+                className="secondary"
+                aria-label="Stop timer"
+                title="Stop timer"
+                onClick={() => void timerAction('stop')}
                 disabled={busy}
               >
-                <TimerControlIcon name="pause" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                aria-label="Resume timer"
-                title="Resume timer"
-                onClick={() => void timerAction('resume')}
-                disabled={busy}
-              >
-                <TimerControlIcon name="play" />
+                <TimerControlIcon name="stop" />
               </button>
             )}
-            <button
-              type="button"
-              className="secondary"
-              aria-label="Stop timer"
-              title="Stop timer"
-              onClick={() => void timerAction('stop')}
-              disabled={busy}
-            >
-              <TimerControlIcon name="stop" />
-            </button>
           </div>
         </section>
       )}
-      {timerFormOpen && (
+      {timerFormOpen && (!readOnly || timer) && (
         <section className="card tracker-form-card">
           <div className="section-heading">
             <div>
               <h2>{timer ? 'Timer details' : 'Start timer'}</h2>
               <p>
-                {timer
-                  ? 'Update the task, project, or tags for the active timer.'
-                  : 'Choose where this time should be recorded.'}
+                {readOnly
+                  ? 'View this member’s active timer. Only the member can make changes.'
+                  : timer
+                    ? 'Update the task, project, or tags for the active timer.'
+                    : 'Choose where this time should be recorded.'}
               </p>
             </div>
             <IconButton label="Close timer form" icon="×" onClick={() => setTimerFormOpen(false)} />
           </div>
-          {timer && timer.organizationId !== organizationID ? (
+          {readOnly && timer ? (
+            <div className="timer-form-row">
+              <div className="timer-readonly-field">
+                <span>Project</span>
+                <div className="timer-readonly-value">
+                  {activeProjectName ?? 'Project unavailable'}
+                </div>
+              </div>
+              <div className="timer-readonly-field">
+                <span>Ticket</span>
+                <div className="timer-readonly-value">
+                  {timer.ticketReferences?.join(', ') || 'None'}
+                </div>
+              </div>
+              <div className="timer-readonly-field">
+                <span>Task description</span>
+                <div className="timer-readonly-value">{timer.description}</div>
+              </div>
+              <div className="timer-readonly-field">
+                <span>Tags</span>
+                <div className="timer-readonly-value">
+                  {timer.tagIds
+                    .map((id) => tags.find((tag) => tag.id === id)?.name)
+                    .filter(Boolean)
+                    .join(', ') || 'None'}
+                </div>
+              </div>
+            </div>
+          ) : timer && timer.organizationId !== organizationID ? (
             <p className="muted">
               Select {activeOrganization?.name ?? 'the active workspace'} to update this timer.
             </p>
@@ -190,16 +199,6 @@ export function TrackerPage() {
                   ]}
                 />
               </label>
-              <fieldset className="timer-tag-field">
-                <legend>Tags</legend>
-                <TagMultiSelect
-                  tags={tags}
-                  selectedIds={timerTags}
-                  onToggle={toggleTag}
-                  showRecentByDefault
-                  disabled={busy}
-                />
-              </fieldset>
               <label>
                 Ticket
                 <TicketPicker
@@ -220,6 +219,16 @@ export function TrackerPage() {
                   disabled={busy}
                 />
               </label>
+              <fieldset className="timer-tag-field">
+                <legend>Tags</legend>
+                <TagMultiSelect
+                  tags={tags}
+                  selectedIds={timerTags}
+                  onToggle={toggleTag}
+                  showRecentByDefault
+                  disabled={busy}
+                />
+              </fieldset>
               {timer ? (
                 <button
                   type="button"
@@ -246,7 +255,7 @@ export function TrackerPage() {
         <article className="summary-card today-summary">
           <span>Today total{timer?.status === 'RUNNING' ? ' · live' : ''}</span>
           <strong>{hoursMinutes(todayTotal)}</strong>
-          {!timer && (
+          {!readOnly && !timer && (
             <button
               type="button"
               className="start-timer-trigger"
@@ -332,15 +341,8 @@ export function TrackerPage() {
                     {entry.ticketReferences.length ? ` · ${entry.ticketReferences.join(', ')}` : ''}
                   </small>
                   <small>
-                    {new Date(entry.startedAt).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}{' '}
-                    –{' '}
-                    {new Date(entry.endedAt).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
+                    {clockTime(new Date(entry.dayStartedAt), selectedTimezone)} –{' '}
+                    {dayEndClockTime(entry.dayEndedAt, selectedDate, selectedTimezone)}
                   </small>
                   {entry.tags.length > 0 && (
                     <span className="entry-tags">
@@ -357,11 +359,13 @@ export function TrackerPage() {
                     icon="◉"
                     onClick={() => void detail.openEntryDetail(entry.id, 'view')}
                   />
-                  <IconButton
-                    label={`Edit ${entry.description}`}
-                    icon="✎"
-                    onClick={() => void detail.openEntryDetail(entry.id, 'edit')}
-                  />
+                  {!readOnly && (
+                    <IconButton
+                      label={`Edit ${entry.description}`}
+                      icon="✎"
+                      onClick={() => void detail.openEntryDetail(entry.id, 'edit')}
+                    />
+                  )}
                 </span>
               </div>
             ))}
@@ -374,150 +378,152 @@ export function TrackerPage() {
           />
         )}
       </section>
-      <div className="tracker-create-actions">
-        <button
-          className="secondary"
-          onClick={() => {
-            setManualFormOpen(true)
-            setTimerFormOpen(false)
-          }}
-        >
-          Add manual entry
-        </button>
-      </div>
-      {manualFormOpen && (
-        <div
-          className="modal-backdrop"
-          role="presentation"
-          onMouseDown={() => setManualFormOpen(false)}
-        >
-          <section
-            className="modal manual-entry-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="manual-entry-title"
-            ref={manualDialogRef}
-            onMouseDown={(event) => event.stopPropagation()}
+      {!readOnly && (
+        <div className="tracker-create-actions">
+          <button
+            className="secondary"
+            onClick={() => {
+              setManualFormOpen(true)
+              setTimerFormOpen(false)
+            }}
           >
-            <ModalHeader
-              id="manual-entry-title"
-              title="Add manual entry"
-              subtitle="Record past or current work in minute-level precision."
-              onClose={() => setManualFormOpen(false)}
-            />
-            <form className="manual-form" onSubmit={(event) => void createManualEntry(event)}>
+            Add manual entry
+          </button>
+        </div>
+      )}
+      {!readOnly && manualFormOpen && (
+        <Modal
+          className="manual-entry-modal"
+          titleId="manual-entry-title"
+          onClose={() => setManualFormOpen(false)}
+        >
+          <ModalHeader
+            id="manual-entry-title"
+            title="Add manual entry"
+            subtitle="Record past or current work in minute-level precision."
+            onClose={() => setManualFormOpen(false)}
+          />
+          <form className="manual-form" onSubmit={(event) => void createManualEntry(event)}>
+            <label>
+              Task description
+              <input
+                value={manualDescription}
+                onChange={(event) => setManualDescription(event.target.value)}
+                maxLength={200}
+                placeholder="Investigating the bug"
+                required
+                autoFocus
+              />
+            </label>
+            <label>
+              Project
+              <SingleSelect
+                label="Project"
+                value={manualProject}
+                onValueChange={setManualProject}
+                required
+                options={projects.map((project) => ({ value: project.id, label: project.name }))}
+              />
+            </label>
+            <label>
+              Ticket
+              <TicketPicker
+                organizationID={organizationID}
+                value={manualTicketIDs}
+                onChange={setManualTicketIDs}
+                disabled={busy}
+              />
+            </label>
+            <label>
+              Start
+              <input
+                type="datetime-local"
+                value={manualStartedAt}
+                onChange={(event) => setManualStartedAt(event.target.value)}
+                required
+              />
+            </label>
+            <div className="manual-mode">
+              <button
+                type="button"
+                className={manualMode === 'end' ? '' : 'secondary'}
+                onClick={() => setManualMode('end')}
+              >
+                End time
+              </button>
+              <button
+                type="button"
+                className={manualMode === 'duration' ? '' : 'secondary'}
+                onClick={() => setManualMode('duration')}
+              >
+                Duration
+              </button>
+            </div>
+            {manualMode === 'end' ? (
               <label>
-                Task description
-                <input
-                  value={manualDescription}
-                  onChange={(event) => setManualDescription(event.target.value)}
-                  maxLength={200}
-                  placeholder="Investigating the bug"
-                  required
-                  autoFocus
-                />
-              </label>
-              <label>
-                Project
-                <SingleSelect
-                  label="Project"
-                  value={manualProject}
-                  onValueChange={setManualProject}
-                  required
-                  options={projects.map((project) => ({ value: project.id, label: project.name }))}
-                />
-              </label>
-              <label>
-                Ticket
-                <TicketPicker
-                  organizationID={organizationID}
-                  value={manualTicketIDs}
-                  onChange={setManualTicketIDs}
-                  disabled={busy}
-                />
-              </label>
-              <label>
-                Start
+                End
                 <input
                   type="datetime-local"
-                  value={manualStartedAt}
-                  onChange={(event) => setManualStartedAt(event.target.value)}
+                  value={manualEndedAt}
+                  onChange={(event) => setManualEndedAt(event.target.value)}
                   required
                 />
               </label>
-              <div className="manual-mode">
-                <button
-                  type="button"
-                  className={manualMode === 'end' ? '' : 'secondary'}
-                  onClick={() => setManualMode('end')}
-                >
-                  End time
-                </button>
-                <button
-                  type="button"
-                  className={manualMode === 'duration' ? '' : 'secondary'}
-                  onClick={() => setManualMode('duration')}
-                >
-                  Duration
-                </button>
-              </div>
-              {manualMode === 'end' ? (
-                <label>
-                  End
-                  <input
-                    type="datetime-local"
-                    value={manualEndedAt}
-                    onChange={(event) => setManualEndedAt(event.target.value)}
-                    required
-                  />
-                </label>
-              ) : (
-                <label>
-                  Duration (minutes)
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={manualDurationMinutes}
-                    onChange={(event) => setManualDurationMinutes(event.target.value)}
-                    required
-                  />
-                </label>
-              )}
-              <fieldset>
-                <legend>Tags</legend>
-                <TagMultiSelect
-                  tags={tags}
-                  selectedIds={manualTags}
-                  onToggle={toggleManualTag}
-                  showRecentByDefault
+            ) : (
+              <label>
+                Duration (minutes)
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={manualDurationMinutes}
+                  onChange={(event) => setManualDurationMinutes(event.target.value)}
+                  required
                 />
-              </fieldset>
-              <ModalFooter>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => setManualFormOpen(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={busy || !manualProject || !manualDescription.trim()}
-                >
-                  Add entry
-                </button>
-              </ModalFooter>
-            </form>
-          </section>
-        </div>
+              </label>
+            )}
+            <fieldset>
+              <legend>Tags</legend>
+              <TagMultiSelect
+                tags={tags}
+                selectedIds={manualTags}
+                onToggle={toggleManualTag}
+                showRecentByDefault
+              />
+            </fieldset>
+            <ModalFooter>
+              <button type="button" className="secondary" onClick={() => setManualFormOpen(false)}>
+                Cancel
+              </button>
+              <button type="submit" disabled={busy || !manualProject || !manualDescription.trim()}>
+                Add entry
+              </button>
+            </ModalFooter>
+          </form>
+        </Modal>
       )}
       <EntryDetailDialog detail={detail} />
     </div>
   )
 }
 
-function TimerControlIcon({ name }: { name: 'edit' | 'pause' | 'play' | 'stop' }) {
+function clockTime(value: Date, timezone: string) {
+  return value.toLocaleTimeString('en-US', {
+    timeZone: timezone,
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function dayEndClockTime(value: string, selectedDate: string, timezone: string) {
+  const end = new Date(value)
+  // A midnight boundary is exclusive; display the final minute of the selected day.
+  const displayEnd =
+    dateInTimezone(timezone, end) === selectedDate ? end : new Date(end.getTime() - 1)
+  return clockTime(displayEnd, timezone)
+}
+
+function TimerControlIcon({ name }: { name: 'view' | 'edit' | 'pause' | 'play' | 'stop' }) {
   return (
     <svg
       aria-hidden="true"
@@ -530,6 +536,12 @@ function TimerControlIcon({ name }: { name: 'edit' | 'pause' | 'play' | 'stop' }
       strokeLinecap="round"
       strokeLinejoin="round"
     >
+      {name === 'view' && (
+        <>
+          <path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z" />
+          <circle cx="12" cy="12" r="2.5" />
+        </>
+      )}
       {name === 'edit' && (
         <>
           <path d="M12 20h9" />

@@ -14,12 +14,14 @@ import type {
 export function useWorkspaceState(initialUser: User, onLogout: () => void) {
   const [user, setUser] = useState(initialUser)
   const [organizations, setOrganizations] = useState<Organization[]>([])
+  const [organizationsLoaded, setOrganizationsLoaded] = useState(false)
   const [organizationID, setOrganizationID] = useState(
     localStorage.getItem('timetracker.organizationId') ?? '',
   )
   const [projects, setProjects] = useState<Project[]>([])
   const [tags, setTags] = useState<Tag[]>([])
   const [members, setMembers] = useState<Member[]>([])
+  const [trackerUserID, setTrackerUserID] = useState('')
   const [incoming, setIncoming] = useState<Invitation[]>([])
   const [sent, setSent] = useState<SentInvitation[]>([])
   const [notice, setNotice] = useState<Notice | null>(null)
@@ -37,6 +39,7 @@ export function useWorkspaceState(initialUser: User, onLogout: () => void) {
   const dismissNotice = useCallback(() => setNotice(null), [])
   const selectOrganization = useCallback((id: string) => {
     setOrganizationID(id)
+    setTrackerUserID('')
     setProjects([])
     setTags([])
     setMembers([])
@@ -45,9 +48,16 @@ export function useWorkspaceState(initialUser: User, onLogout: () => void) {
   }, [])
   const loadOrganizations = useCallback(async () => {
     const result = await api<Organization[]>('/organizations')
-    if (result.error) return setMessage(result.error.message, 'error')
+    if (result.error) {
+      setMessage(result.error.message, 'error')
+      setOrganizationsLoaded(true)
+      return
+    }
     setOrganizations(result.data)
-    if (!organizationID && result.data[0]) selectOrganization(result.data[0].id)
+    if (!result.data.some((item) => item.id === organizationID)) {
+      selectOrganization(result.data[0]?.id ?? '')
+    }
+    setOrganizationsLoaded(true)
   }, [organizationID, selectOrganization, setMessage])
   const loadResources = useCallback(async () => {
     if (!organizationID) return
@@ -98,12 +108,15 @@ export function useWorkspaceState(initialUser: User, onLogout: () => void) {
     user,
     setUser,
     organizations,
+    organizationsLoaded,
     organizationID,
     organization,
     isAdmin,
     projects,
     tags,
     members,
+    trackerUserID,
+    setTrackerUserID,
     incoming,
     sent,
     notice,

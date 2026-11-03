@@ -18,6 +18,10 @@ import (
 )
 
 const maximumReportEntries = 10000
+const maximumSummaryGroups = 10000
+const maximumSummaryContributions = 1000000
+
+var errReportComplexity = errors.New("report grouping exceeds safe resource limits")
 
 var validGroupDimensions = map[string]bool{"member": true, "project": true, "ticket": true, "tag": true, "date": true}
 
@@ -97,7 +101,11 @@ func (handler Handler) Summary(writer http.ResponseWriter, request *http.Request
 	if !ok {
 		return
 	}
-	rows := summarize(data)
+	rows, err := summarize(data)
+	if err != nil {
+		respondError(writer, http.StatusUnprocessableEntity, "REPORT_COMPLEXITY_EXCEEDED", "Narrow the date range, filters, or groupings: a summary supports up to 10,000 groups and 1,000,000 grouped contributions.")
+		return
+	}
 	start := min(data.Request.Offset, len(rows))
 	end := min(start+data.Request.Limit, len(rows))
 	respond(writer, http.StatusOK, map[string]any{
@@ -119,6 +127,15 @@ func (handler Handler) Export(writer http.ResponseWriter, request *http.Request)
 	if !ok {
 		return
 	}
+	var summary []summaryRow
+	if format == "summary" {
+		var err error
+		summary, err = summarize(data)
+		if err != nil {
+			respondError(writer, http.StatusUnprocessableEntity, "REPORT_COMPLEXITY_EXCEEDED", "Narrow the date range, filters, or groupings: a summary supports up to 10,000 groups and 1,000,000 grouped contributions.")
+			return
+		}
+	}
 	filename := fmt.Sprintf("time-report-%s-%s-to-%s.csv", format, data.Request.Start.Format("2006-01-02"), data.Request.End.Format("2006-01-02"))
 	writer.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	writer.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
@@ -127,7 +144,7 @@ func (handler Handler) Export(writer http.ResponseWriter, request *http.Request)
 	if format == "detailed" {
 		writeDetailedCSV(csvWriter, data)
 	} else {
-		writeSummaryCSV(csvWriter, data, summarize(data))
+		writeSummaryCSV(csvWriter, data, summary)
 	}
 	csvWriter.Flush()
 }
@@ -405,24 +422,35 @@ func splitAtMidnight(value interval, location *time.Location) []interval {
 	return result
 }
 
-func summarize(data reportData) []summaryRow {
+func summarize(data reportData) ([]summaryRow, error) {
 	totals := make(map[string]*summaryRow)
+	contributions := 0
 	for _, entry := range data.Entries {
 		for _, active := range entryIntervals(entry, data.Events[entry.ID], data.Request.Start.UTC(), data.Request.RangeEnd.UTC()) {
 			for _, segment := range splitAtMidnight(active, data.Request.Location) {
-				combinations := groupCombinations(entry, segment.Start.In(data.Request.Location), data.Request.GroupBy, data.Request.DateGrouping)
 				seconds := int64(segment.End.Sub(segment.Start).Seconds())
-				for _, values := range combinations {
+				err := visitGroupCombinations(entry, segment.Start.In(data.Request.Location), data.Request.GroupBy, data.Request.DateGrouping, func(values []groupValue) error {
+					contributions++
+					if contributions > maximumSummaryContributions {
+						return errReportComplexity
+					}
 					parts := make([]string, len(values))
 					for index, value := range values {
 						parts[index] = value.Dimension + "=" + value.Key
 					}
 					key := strings.Join(parts, "\x1f")
 					if totals[key] == nil {
+						if len(totals) >= maximumSummaryGroups {
+							return errReportComplexity
+						}
 						copyValues := append([]groupValue(nil), values...)
 						totals[key] = &summaryRow{Values: copyValues}
 					}
 					totals[key].DurationSeconds += seconds
+					return nil
+				})
+				if err != nil {
+					return nil, err
 				}
 			}
 		}
@@ -432,7 +460,30 @@ func summarize(data reportData) []summaryRow {
 		rows = append(rows, *row)
 	}
 	sort.Slice(rows, func(i, j int) bool { return summarySortKey(rows[i]) < summarySortKey(rows[j]) })
-	return rows
+	return rows, nil
+}
+
+// Walk one combination at a time instead of allocating the tag × ticket product.
+func visitGroupCombinations(entry reportEntry, localTime time.Time, dimensions []string, dateGrouping string, visit func([]groupValue) error) error {
+	options := make([][]groupValue, len(dimensions))
+	for index, dimension := range dimensions {
+		options[index] = valuesForDimension(entry, localTime, dimension, dateGrouping)
+	}
+	values := make([]groupValue, len(dimensions))
+	var walk func(int) error
+	walk = func(index int) error {
+		if index == len(dimensions) {
+			return visit(values)
+		}
+		for _, option := range options[index] {
+			values[index] = option
+			if err := walk(index + 1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return walk(0)
 }
 
 func groupCombinations(entry reportEntry, localTime time.Time, dimensions []string, dateGrouping string) [][]groupValue {
@@ -507,7 +558,7 @@ func writeDetailedCSV(writer *csv.Writer, data reportData) {
 	_ = writer.Write([]string{"Member", "Project", "Ticket", "Ticket title", "Description", "Tags", "Source", "Start", "End", "Duration seconds", "Duration"})
 	for _, entry := range data.Entries {
 		seconds := data.Duration[entry.ID]
-		_ = writer.Write([]string{entry.UserName, entry.ProjectName, strings.Join(entry.TicketReferences, ", "), strings.Join(entry.TicketTitles, ", "), entry.Description, strings.Join(entry.TagNames, ", "), entry.SourceType, entry.StartedAt.In(data.Request.Location).Format("2006-01-02 15:04:05 MST"), entry.EndedAt.In(data.Request.Location).Format("2006-01-02 15:04:05 MST"), strconv.FormatInt(seconds, 10), formatDuration(seconds)})
+		_ = writer.Write(safeCSVRecord([]string{entry.UserName, entry.ProjectName, strings.Join(entry.TicketReferences, ", "), strings.Join(entry.TicketTitles, ", "), entry.Description, strings.Join(entry.TagNames, ", "), entry.SourceType, entry.StartedAt.In(data.Request.Location).Format("2006-01-02 15:04:05 MST"), entry.EndedAt.In(data.Request.Location).Format("2006-01-02 15:04:05 MST"), strconv.FormatInt(seconds, 10), formatDuration(seconds)}))
 	}
 }
 
@@ -527,8 +578,21 @@ func writeSummaryCSV(writer *csv.Writer, data reportData, rows []summaryRow) {
 			record = append(record, value.Label)
 		}
 		record = append(record, strconv.FormatInt(row.DurationSeconds, 10), formatDuration(row.DurationSeconds))
-		_ = writer.Write(record)
+		_ = writer.Write(safeCSVRecord(record))
 	}
+}
+
+// Spreadsheet applications may execute formula-like cells even when CSV-quoted.
+// Prefix such values with an apostrophe; preserve ordinary text and numeric totals.
+func safeCSVRecord(record []string) []string {
+	for index, value := range record {
+		trimmed := strings.TrimLeft(value, " \t\r\n")
+		if strings.ContainsAny(value[:len(value)-len(trimmed)], "\t\r\n") ||
+			(len(trimmed) > 0 && strings.ContainsRune("=+-@", rune(trimmed[0]))) {
+			record[index] = "'" + value
+		}
+	}
+	return record
 }
 
 func parseDate(value string, fallback time.Time, location *time.Location) (time.Time, error) {

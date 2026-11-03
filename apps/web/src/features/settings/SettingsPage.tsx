@@ -1,6 +1,9 @@
+import { useTheme } from '../../app/ThemeContext'
+import type { ThemePreference } from '../../app/theme'
 import { useSettings } from './useSettings'
 
-export function SettingsPage() {
+export function SettingsPage({ setup = false }: { setup?: boolean }) {
+  const { preference, setPreference } = useTheme()
   const {
     saveProfile,
     profileName,
@@ -19,27 +22,35 @@ export function SettingsPage() {
 
   return (
     <div className="split-layout">
+      {!setup && (
+        <section className="card">
+          <h2>Your profile</h2>
+          <form className="stack" onSubmit={(event) => void saveProfile(event)}>
+            <label>
+              Name
+              <input
+                value={profileName}
+                maxLength={100}
+                required
+                onChange={(event) => setProfileName(event.target.value)}
+              />
+            </label>
+            <label>
+              Timezone
+              <input value={user.timezone} disabled />
+            </label>
+            <button>Save profile</button>
+          </form>
+        </section>
+      )}
       <section className="card">
-        <h2>Your profile</h2>
-        <form className="stack" onSubmit={(event) => void saveProfile(event)}>
-          <label>
-            Name
-            <input
-              value={profileName}
-              maxLength={100}
-              required
-              onChange={(event) => setProfileName(event.target.value)}
-            />
-          </label>
-          <label>
-            Timezone
-            <input value={user.timezone} disabled />
-          </label>
-          <button>Save profile</button>
-        </form>
-      </section>
-      <section className="card">
-        <h2>{isAdmin ? 'Organization settings' : 'Create an organization'}</h2>
+        <h2>
+          {setup
+            ? 'Your first organization'
+            : isAdmin
+              ? 'Organization settings'
+              : 'Create an organization'}
+        </h2>
         {isAdmin ? (
           <form className="stack" onSubmit={(event) => void saveOrganization(event)}>
             <label>
@@ -66,7 +77,13 @@ export function SettingsPage() {
           className="stack create-organization"
           onSubmit={(event) => void createOrganization(event)}
         >
-          <h3>{isAdmin ? 'Create another organization' : 'New organization'}</h3>
+          <h3>
+            {setup
+              ? 'Choose a name for your workspace'
+              : isAdmin
+                ? 'Create another organization'
+                : 'New organization'}
+          </h3>
           <label>
             Organization name
             <input
@@ -79,6 +96,25 @@ export function SettingsPage() {
           </label>
           <button className="secondary">Create organization</button>
         </form>
+      </section>
+      <section className="card">
+        <h2>Appearance</h2>
+        <p className="muted">System follows this device’s appearance setting.</p>
+        <fieldset className="theme-options">
+          <legend>Theme</legend>
+          {(['system', 'light', 'dark'] as ThemePreference[]).map((option) => (
+            <label className="theme-option" key={option}>
+              <input
+                type="radio"
+                name="theme"
+                value={option}
+                checked={preference === option}
+                onChange={() => setPreference(option)}
+              />
+              <span>{option === 'system' ? 'System' : option === 'light' ? 'Light' : 'Dark'}</span>
+            </label>
+          ))}
+        </fieldset>
       </section>
     </div>
   )

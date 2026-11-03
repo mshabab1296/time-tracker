@@ -11,8 +11,10 @@ export function DashboardLayout({
   organizations,
   organizationID,
   page,
+  isOrganizationSetup = false,
   notice,
   children,
+  headingAction,
   onOrganizationChange,
   onDismissNotice,
   onLogout,
@@ -21,14 +23,23 @@ export function DashboardLayout({
   organizations: Organization[]
   organizationID: string
   page: Page
+  isOrganizationSetup?: boolean
   notice: Notice | null
   children: ReactNode
+  headingAction?: ReactNode
   onOrganizationChange: (id: string) => void
   onDismissNotice: () => void
   onLogout: () => void
 }) {
   const organization = organizations.find((item) => item.id === organizationID)
-  const pageDetails = pages[page]
+  const pageDetails = isOrganizationSetup
+    ? page === 'team'
+      ? { title: 'Your invitations', description: 'Join an organization that invited you.' }
+      : {
+          title: 'Create your organization',
+          description: 'Set up a workspace to start tracking time with your team.',
+        }
+    : pages[page]
 
   return (
     <div className="dashboard-shell">
@@ -38,7 +49,10 @@ export function DashboardLayout({
           <span>TimeTracker</span>
         </div>
         <nav aria-label="Primary navigation">
-          {(Object.keys(pages) as Page[]).map((item) => (
+          {(isOrganizationSetup
+            ? (['team', 'settings'] as Page[])
+            : (Object.keys(pages) as Page[])
+          ).map((item) => (
             <NavLink
               to={`/${item}`}
               className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
@@ -56,21 +70,23 @@ export function DashboardLayout({
       </aside>
       <div className="dashboard-main">
         <header className="topbar">
-          <label className="organization-picker">
-            <span>Workspace</span>
-            <SingleSelect
-              label="Workspace"
-              value={organizationID}
-              onValueChange={onOrganizationChange}
-              options={[
-                { value: '', label: 'Select workspace' },
-                ...organizations.map((item) => ({
-                  value: item.id,
-                  label: `${item.name} · ${item.role}`,
-                })),
-              ]}
-            />
-          </label>
+          {!isOrganizationSetup && (
+            <label className="organization-picker">
+              <span>Workspace</span>
+              <SingleSelect
+                label="Workspace"
+                value={organizationID}
+                onValueChange={onOrganizationChange}
+                options={[
+                  { value: '', label: 'Select workspace' },
+                  ...organizations.map((item) => ({
+                    value: item.id,
+                    label: `${item.name} · ${item.role}`,
+                  })),
+                ]}
+              />
+            </label>
+          )}
           <div className="topbar-user">
             <span>{user.name}</span>
             <button className="ghost" onClick={onLogout}>
@@ -81,10 +97,13 @@ export function DashboardLayout({
         <main className="page-content">
           <div className="page-heading">
             <div>
-              <p className="eyebrow">{organization?.name ?? 'Workspace'}</p>
+              <p className="eyebrow">
+                {isOrganizationSetup ? 'Getting started' : (organization?.name ?? 'Workspace')}
+              </p>
               <h1>{pageDetails.title}</h1>
               <p>{pageDetails.description}</p>
             </div>
+            {headingAction}
           </div>
           {children}
         </main>

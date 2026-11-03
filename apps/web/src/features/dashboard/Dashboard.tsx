@@ -1,7 +1,7 @@
-import { Navigate, Route, Routes, useLocation } from 'react-router'
+import { Link, Navigate, Route, Routes, useLocation } from 'react-router'
 import { pages as pageDetails } from '../../app/navigation'
 import { DashboardLayout } from '../../components/layout/DashboardLayout'
-import { EmptyState } from '../../components/ui/EmptyState'
+import { SingleSelect } from '../../components/ui/SingleSelect'
 import type { Page, User } from '../../types/domain'
 import { EntriesPage } from '../entries/EntriesPage'
 import { ProjectsPage } from '../projects/ProjectsPage'
@@ -32,13 +32,22 @@ function DashboardContent() {
   const {
     user,
     organizations,
+    organizationsLoaded,
     organizationID,
     organization,
+    isAdmin,
+    members,
+    trackerUserID,
+    setTrackerUserID,
+    incoming,
     notice,
     dismissNotice,
     selectOrganization,
     logout,
   } = useWorkspace()
+  const isOrganizationSetup = organizationsLoaded && !organization
+
+  if (!organizationsLoaded) return <p>Loading workspaces…</p>
 
   return (
     <DashboardLayout
@@ -46,25 +55,59 @@ function DashboardContent() {
       organizations={organizations}
       organizationID={organizationID}
       page={page}
+      headingAction={
+        page === 'tracker' && isAdmin && organization ? (
+          <label className="tracker-member-picker">
+            Member
+            <SingleSelect
+              label="Member"
+              value={trackerUserID}
+              onValueChange={setTrackerUserID}
+              options={[
+                { value: '', label: 'Me' },
+                ...members
+                  .filter((member) => member.id !== user.id)
+                  .map((member) => ({ value: member.id, label: member.name })),
+              ]}
+            />
+          </label>
+        ) : undefined
+      }
+      isOrganizationSetup={isOrganizationSetup}
       notice={notice}
       onDismissNotice={dismissNotice}
       onOrganizationChange={selectOrganization}
       onLogout={() => void logout()}
     >
+      {incoming.length > 0 && (
+        <p className="notice" role="status">
+          You have {incoming.length} pending organization{' '}
+          {incoming.length === 1 ? 'invitation' : 'invitations'}.{' '}
+          <Link to="/team">Review invitations</Link>
+        </p>
+      )}
       {organization ? (
         <Routes key={organizationID}>
           <Route index element={<Navigate to="/tracker" replace />} />
           {(Object.keys(pageComponents) as Page[]).map((name) => {
             const PageComponent = pageComponents[name]
-            return <Route key={name} path={name} element={<PageComponent />} />
+            return (
+              <Route
+                key={name}
+                path={name}
+                element={<PageComponent key={name === 'tracker' ? trackerUserID : name} />}
+              />
+            )
           })}
           <Route path="*" element={<Navigate to="/tracker" replace />} />
         </Routes>
       ) : (
-        <EmptyState
-          title="Create or select an organization"
-          text="Organizations keep projects, tags, Members, and time entries separate."
-        />
+        <>
+          {pathname !== '/settings' && pathname !== '/team' && (
+            <Navigate to={incoming.length ? '/team' : '/settings'} replace />
+          )}
+          {pathname === '/team' ? <TeamPage /> : <SettingsPage setup />}
+        </>
       )}
     </DashboardLayout>
   )

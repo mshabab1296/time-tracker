@@ -6,6 +6,13 @@ This plan turns the agreed functional requirements, non-functional requirements,
 
 The implementation uses a **vertical-slice** approach: each early milestone delivers a working user workflow across the database, Go API, React UI, and automated tests. This avoids building isolated layers that cannot yet be used.
 
+### Current delivery status — 2026-09-27
+
+- Phases 0–5: implementation delivered; release gates remain part of Phase 6.
+- Phase 5A: implemented and database-backed verification completed, including forward-migration preservation.
+- Phase 6: local hardening and verification delivered, including Linux race checks, typed API contracts, bounded summaries, least-privilege grant checks, mixed 1,000-user capacity testing, expanded restore rehearsal, and shared modal/dropdown keyboard checks. Release sign-off remains open for final CI, full browser/screen-reader coverage, and production-shaped capacity/security/recovery validation. Evidence and exact remaining gates are in `release-readiness.md`; Phase 6 is not fully signed off.
+- Phase 7: pending; no production infrastructure is provisioned.
+
 ## 2. Target Repository Layout
 
 ```text

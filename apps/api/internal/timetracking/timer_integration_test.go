@@ -31,6 +31,7 @@ func TestTimerStateFlowAndRetries(t *testing.T) {
 	cleanup := func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM sessions WHERE user_id = $1`, userID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM time_entries WHERE organization_id = $1`, organizationID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM audit_logs WHERE organization_id = $1`, organizationID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM tags WHERE organization_id = $1`, organizationID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM projects WHERE organization_id = $1`, organizationID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM memberships WHERE organization_id = $1`, organizationID)
@@ -129,6 +130,27 @@ func TestTimerStateFlowAndRetries(t *testing.T) {
 	if manualRecorder.Code != http.StatusCreated {
 		t.Fatalf("manual entry status=%d body=%s", manualRecorder.Code, manualRecorder.Body.String())
 	}
+	for _, search := range []string{"Reviewing", "Billable"} {
+		path := fmt.Sprintf("/api/v1/time-entries?organizationId=%s&projectId=%s&date=%s&search=%s&limit=1", organizationID, projectID, manualStartedAt.Format("2006-01-02"), search)
+		filtered := invokeAt(t, handler.ListCompleted, http.MethodGet, path, "", rawSession, "")
+		if filtered.Code != http.StatusOK {
+			t.Fatalf("filtered entries status=%d body=%s", filtered.Code, filtered.Body.String())
+		}
+		var response struct {
+			Data struct {
+				Total int `json:"total"`
+				Items []struct {
+					Description string `json:"description"`
+				} `json:"items"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(filtered.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode filtered entries: %v", err)
+		}
+		if response.Data.Total != 1 || len(response.Data.Items) != 1 || response.Data.Items[0].Description != "Reviewing the fix" {
+			t.Fatalf("filtered entries for %s: %#v", search, response.Data)
+		}
+	}
 	durationStartedAt := manualEndedAt.Add(time.Minute)
 	durationBody := fmt.Sprintf(`{"organizationId":"%s","projectId":"%s","description":"Writing tests","tagIds":[],"startedAt":"%s","durationMinutes":30}`, organizationID, projectID, durationStartedAt.Format(time.RFC3339))
 	durationRecorder := invoke(t, handler.CreateManual, http.MethodPost, durationBody, rawSession, csrfToken)
@@ -163,6 +185,21 @@ func TestTimerStateFlowAndRetries(t *testing.T) {
 	var activeCount int
 	if err := pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM time_entries WHERE user_id = $1 AND status IN ('RUNNING', 'PAUSED')`, userID).Scan(&activeCount); err != nil || activeCount != 1 {
 		t.Fatalf("active timer count=%d err=%v, want 1", activeCount, err)
+	}
+	var secondTimerID uuid.UUID
+	if err := pool.QueryRow(context.Background(), `SELECT id FROM time_entries WHERE user_id = $1 AND status = 'RUNNING'`, userID).Scan(&secondTimerID); err != nil {
+		t.Fatalf("load second timer: %v", err)
+	}
+	secondEntryBody := `{"entryId":"` + secondTimerID.String() + `"}`
+	if paused := invoke(t, handler.Pause, http.MethodPost, secondEntryBody, rawSession, csrfToken); paused.Code != http.StatusOK {
+		t.Fatalf("pause before stop status=%d body=%s", paused.Code, paused.Body.String())
+	}
+	stoppedWhilePaused := invoke(t, handler.Stop, http.MethodPost, secondEntryBody, rawSession, csrfToken)
+	if stoppedWhilePaused.Code != http.StatusOK || decodeEntry(t, stoppedWhilePaused).Data.Status != "STOPPED" {
+		t.Fatalf("stop while paused status=%d body=%s", stoppedWhilePaused.Code, stoppedWhilePaused.Body.String())
+	}
+	if err := pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM timer_events WHERE time_entry_id = $1`, secondTimerID).Scan(&eventCount); err != nil || eventCount != 3 {
+		t.Fatalf("paused-stop event count=%d err=%v, want 3", eventCount, err)
 	}
 }
 

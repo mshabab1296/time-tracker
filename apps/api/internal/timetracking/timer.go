@@ -45,18 +45,19 @@ type timerEvent struct {
 }
 
 type entry struct {
-	ID              uuid.UUID
-	OrganizationID  uuid.UUID
-	UserID          uuid.UUID
-	ProjectID       uuid.UUID
-	TicketIDs       []uuid.UUID
-	Description     string
-	Status          string
-	StartedAt       time.Time
-	EndedAt         *time.Time
-	DurationSeconds int64
-	TagIDs          []uuid.UUID
-	Events          []timerEvent
+	ID               uuid.UUID
+	OrganizationID   uuid.UUID
+	UserID           uuid.UUID
+	ProjectID        uuid.UUID
+	TicketIDs        []uuid.UUID
+	TicketReferences []string
+	Description      string
+	Status           string
+	StartedAt        time.Time
+	EndedAt          *time.Time
+	DurationSeconds  int64
+	TagIDs           []uuid.UUID
+	Events           []timerEvent
 }
 
 func (handler Handler) Start(writer http.ResponseWriter, request *http.Request) {
@@ -121,6 +122,10 @@ func (handler Handler) Start(writer http.ResponseWriter, request *http.Request) 
 	if err == nil {
 		err = replaceTickets(request, tx, input.OrganizationID, entryID, input.TicketIDs)
 	}
+	created := entry{ID: entryID, OrganizationID: input.OrganizationID, UserID: userID, ProjectID: input.ProjectID, Description: input.Description, Status: "RUNNING", StartedAt: now, TagIDs: input.TagIDs, Events: []timerEvent{{Type: "START", At: now}}}
+	if err == nil {
+		err = loadEntryTickets(request, tx, &created)
+	}
 	if err != nil {
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to start timer.")
 		return
@@ -129,7 +134,7 @@ func (handler Handler) Start(writer http.ResponseWriter, request *http.Request) 
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to start timer.")
 		return
 	}
-	respondEntry(writer, http.StatusCreated, entry{ID: entryID, OrganizationID: input.OrganizationID, UserID: userID, ProjectID: input.ProjectID, TicketIDs: input.TicketIDs, Description: input.Description, Status: "RUNNING", StartedAt: now, TagIDs: input.TagIDs, Events: []timerEvent{{Type: "START", At: now}}}, now)
+	respondEntry(writer, http.StatusCreated, created, now)
 }
 
 func (handler Handler) Active(writer http.ResponseWriter, request *http.Request) {
@@ -138,6 +143,10 @@ func (handler Handler) Active(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	organizationID, ok := requestedOrganization(writer, request, handler, userID)
+	if !ok {
+		return
+	}
+	userID, ok = requestedTrackerUser(writer, request, handler, organizationID, userID)
 	if !ok {
 		return
 	}
@@ -288,6 +297,9 @@ func (handler Handler) UpdateActive(writer http.ResponseWriter, request *http.Re
 	if err == nil {
 		err = replaceTickets(request, tx, current.OrganizationID, current.ID, input.TicketIDs)
 	}
+	if err == nil {
+		err = loadEntryTickets(request, tx, &current)
+	}
 	if err != nil {
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to update timer.")
 		return
@@ -296,7 +308,7 @@ func (handler Handler) UpdateActive(writer http.ResponseWriter, request *http.Re
 		respondError(writer, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to update timer.")
 		return
 	}
-	current.ProjectID, current.TicketIDs, current.Description, current.TagIDs = input.ProjectID, input.TicketIDs, input.Description, input.TagIDs
+	current.ProjectID, current.Description, current.TagIDs = input.ProjectID, input.Description, input.TagIDs
 	respondEntry(writer, http.StatusOK, current, time.Now().UTC())
 }
 
@@ -377,19 +389,30 @@ func loadEntry(request *http.Request, database querier, entryID, userID uuid.UUI
 		return entry{}, false, err
 	}
 	tagRows.Close()
-	ticketRows, err := database.Query(request.Context(), `SELECT ticket_id FROM time_entry_tickets WHERE time_entry_id = $1 ORDER BY ticket_id`, result.ID)
-	if err != nil {
+	if err = loadEntryTickets(request, database, &result); err != nil {
 		return entry{}, false, err
 	}
+	return result, true, nil
+}
+
+func loadEntryTickets(request *http.Request, database querier, result *entry) error {
+	ticketRows, err := database.Query(request.Context(), `SELECT t.id, t.reference FROM time_entry_tickets et JOIN tickets t ON t.id = et.ticket_id AND t.organization_id = et.organization_id WHERE et.time_entry_id = $1 ORDER BY t.reference, t.id`, result.ID)
+	if err != nil {
+		return err
+	}
 	defer ticketRows.Close()
+	result.TicketIDs = nil
+	result.TicketReferences = nil
 	for ticketRows.Next() {
 		var id uuid.UUID
-		if err = ticketRows.Scan(&id); err != nil {
-			return entry{}, false, err
+		var reference string
+		if err = ticketRows.Scan(&id, &reference); err != nil {
+			return err
 		}
 		result.TicketIDs = append(result.TicketIDs, id)
+		result.TicketReferences = append(result.TicketReferences, reference)
 	}
-	return result, true, ticketRows.Err()
+	return ticketRows.Err()
 }
 
 func validateSelection(request *http.Request, tx pgx.Tx, userID, organizationID, projectID uuid.UUID, tagIDs []uuid.UUID) bool {
@@ -470,28 +493,46 @@ func lockUser(request *http.Request, tx pgx.Tx, userID uuid.UUID) bool {
 func duration(events []timerEvent, now time.Time) (int64, bool) {
 	var runningAt *time.Time
 	var total time.Duration
+	state := ""
 	for index, event := range events {
 		if event.At.After(now) || (index > 0 && event.At.Before(events[index-1].At)) {
 			return 0, false
 		}
 		switch event.Type {
-		case "START", "RESUME":
-			if runningAt != nil {
+		case "START":
+			if index != 0 {
 				return 0, false
 			}
 			at := event.At
 			runningAt = &at
-		case "PAUSE", "STOP":
-			if runningAt == nil {
+			state = "RUNNING"
+		case "RESUME":
+			if state != "PAUSED" {
+				return 0, false
+			}
+			at := event.At
+			runningAt = &at
+			state = "RUNNING"
+		case "PAUSE":
+			if state != "RUNNING" || runningAt == nil {
 				return 0, false
 			}
 			total += event.At.Sub(*runningAt)
 			runningAt = nil
+			state = "PAUSED"
+		case "STOP":
+			if state == "RUNNING" && runningAt != nil {
+				total += event.At.Sub(*runningAt)
+			} else if state != "PAUSED" {
+				return 0, false
+			}
+			runningAt = nil
+			state = "STOPPED"
 		default:
 			return 0, false
 		}
 	}
-	if runningAt != nil {
+	if state == "RUNNING" && runningAt != nil {
 		total += now.Sub(*runningAt)
 	}
 	return int64(total.Seconds()), true
@@ -509,7 +550,8 @@ func respondEntry(writer http.ResponseWriter, status int, value entry, now time.
 	tags := make([]uuid.UUID, 0, len(value.TagIDs))
 	tags = append(tags, value.TagIDs...)
 	tickets := append([]uuid.UUID{}, value.TicketIDs...)
-	respond(writer, status, map[string]any{"id": value.ID, "organizationId": value.OrganizationID, "projectId": value.ProjectID, "ticketIds": tickets, "description": value.Description, "tagIds": tags, "status": value.Status, "startedAt": value.StartedAt, "endedAt": value.EndedAt, "durationSeconds": durationSeconds, "events": events})
+	ticketReferences := append([]string{}, value.TicketReferences...)
+	respond(writer, status, map[string]any{"id": value.ID, "organizationId": value.OrganizationID, "projectId": value.ProjectID, "ticketIds": tickets, "ticketReferences": ticketReferences, "description": value.Description, "tagIds": tags, "status": value.Status, "startedAt": value.StartedAt, "endedAt": value.EndedAt, "durationSeconds": durationSeconds, "events": events})
 }
 
 func validStartInput(writer http.ResponseWriter, input startRequest) bool {

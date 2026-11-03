@@ -19,6 +19,8 @@ import (
 
 func New(database *pgxpool.Pool, logger *slog.Logger, sender platformemail.Sender, webBaseURL string, cookieSecure bool) http.Handler {
 	mux := http.NewServeMux()
+	metrics := newRequestMetrics()
+	mux.HandleFunc("GET /metrics", metrics.serveHTTP)
 	mux.HandleFunc("GET /health/live", live)
 	mux.HandleFunc("GET /health/ready", ready(database))
 	mux.HandleFunc("GET /api/v1", apiRoot)
@@ -56,6 +58,7 @@ func New(database *pgxpool.Pool, logger *slog.Logger, sender platformemail.Sende
 	mux.Handle("POST /api/v1/organizations/{organizationID}/invitations/{invitationID}/resend", organizations.InvitationResendHandler{Database: database, Email: sender, WebBaseURL: webBaseURL})
 	mux.Handle("DELETE /api/v1/organizations/{organizationID}/invitations/{invitationID}", organizations.InvitationCancelHandler{Database: database})
 	mux.Handle("GET /api/v1/invitations", organizations.InvitationListHandler{Database: database})
+	mux.Handle("POST /api/v1/invitations/accept-token", organizations.InvitationTokenAcceptHandler{Database: database})
 	mux.Handle("POST /api/v1/invitations/{invitationID}/{decision}", organizations.InvitationDecisionHandler{Database: database})
 	mux.HandleFunc("POST /api/v1/timer/start", timetracking.Handler{Database: database}.Start)
 	mux.HandleFunc("POST /api/v1/timer/pause", timetracking.Handler{Database: database}.Pause)
@@ -74,7 +77,7 @@ func New(database *pgxpool.Pool, logger *slog.Logger, sender platformemail.Sende
 	mux.HandleFunc("GET /api/v1/reports/entries", reporting.Handler{Database: database}.Entries)
 	mux.HandleFunc("GET /api/v1/reports/summary", reporting.Handler{Database: database}.Summary)
 	mux.HandleFunc("GET /api/v1/reports/export", reporting.Handler{Database: database}.Export)
-	return withRequestLogging(logger, mux)
+	return metrics.observe(withRequestLogging(logger, mux))
 }
 
 func live(writer http.ResponseWriter, _ *http.Request) {
@@ -100,14 +103,41 @@ func apiRoot(writer http.ResponseWriter, _ *http.Request) {
 func withRequestLogging(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requestID := request.Header.Get("X-Request-ID")
-		if requestID == "" {
+		if !validRequestID(requestID) {
 			requestID = uuid.NewString()
 		}
 		writer.Header().Set("X-Request-ID", requestID)
 		startedAt := time.Now()
-		next.ServeHTTP(writer, request)
-		logger.Info("request completed", "requestId", requestID, "method", request.Method, "path", request.URL.Path, "durationMs", time.Since(startedAt).Milliseconds())
+		response := &statusWriter{ResponseWriter: writer}
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				// Panic values can contain secrets. Record only safe request context.
+				logger.Error("request panic recovered", "requestId", requestID, "method", request.Method, "path", request.URL.Path)
+				if response.status == 0 {
+					writeJSON(response, http.StatusInternalServerError, map[string]any{"data": nil, "error": map[string]string{"code": "INTERNAL_ERROR", "message": "Unable to process the request."}, "meta": map[string]string{"requestId": requestID}})
+				}
+			}
+			level := slog.LevelInfo
+			if response.code() >= 500 {
+				level = slog.LevelError
+			}
+			logger.Log(request.Context(), level, "request completed", "requestId", requestID, "method", request.Method, "path", request.URL.Path, "status", response.code(), "durationMs", time.Since(startedAt).Milliseconds())
+		}()
+		next.ServeHTTP(response, request)
 	})
+}
+
+func validRequestID(value string) bool {
+	if len(value) == 0 || len(value) > 128 {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' || char == '_' || char == '.' || char == ':' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func writeJSON(writer http.ResponseWriter, status int, body any) {

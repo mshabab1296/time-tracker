@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { api } from '../../api/client'
-import type { ActiveTimer, CompletedEntry, WeekSummary } from '../../types/domain'
+import type { ActiveTimer, CompletedEntry, TodayEntry, WeekSummary } from '../../types/domain'
 import { dateInTimezone, duration, localDateTimeInput } from '../../utils/time'
 import { useWorkspace } from '../dashboard/WorkspaceContext'
 
@@ -9,32 +9,44 @@ export function useTracker() {
     organizationID,
     organizations,
     user,
+    members,
+    trackerUserID,
     projects,
     tags,
     setMessage,
     entriesRevision,
     notifyEntriesChanged,
   } = useWorkspace()
-  const [entries, setEntries] = useState<CompletedEntry[]>([])
+  const selectedTimezone =
+    members.find((member) => member.id === trackerUserID)?.timezone ?? user.timezone
+  const readOnly = Boolean(trackerUserID)
+  const userQuery = trackerUserID ? `&userId=${encodeURIComponent(trackerUserID)}` : ''
+  const [entries, setEntries] = useState<TodayEntry[]>([])
 
   const [weekSummary, setWeekSummary] = useState<WeekSummary | null>(null)
 
   const [currentWeekSummary, setCurrentWeekSummary] = useState<WeekSummary | null>(null)
 
   const [selectedWeekStart, setSelectedWeekStart] = useState(() =>
-    mondayOfWeek(dateInTimezone(user.timezone)),
+    mondayOfWeek(dateInTimezone(selectedTimezone)),
   )
 
   const weekRequestRef = useRef(0)
 
   const currentWeekCacheRef = useRef<{
     organizationID: string
+    userID: string
     weekStart: string
     entriesRevision: number
     summary: WeekSummary
   } | null>(null)
 
-  const [timer, setTimer] = useState<ActiveTimer | null>(null)
+  const timerScope = `${organizationID}:${trackerUserID}`
+  const [timerSnapshot, setTimerSnapshot] = useState<{
+    scope: string
+    value: ActiveTimer | null
+  } | null>(null)
+  const timer = timerSnapshot?.scope === timerScope ? timerSnapshot.value : null
 
   const [timerProject, setTimerProject] = useState('')
 
@@ -66,7 +78,7 @@ export function useTracker() {
 
   const [busy, setBusy] = useState(false)
 
-  const [selectedDate, setSelectedDate] = useState(() => dateInTimezone(user.timezone))
+  const [selectedDate, setSelectedDate] = useState(() => dateInTimezone(selectedTimezone))
 
   const [timerFormOpen, setTimerFormOpen] = useState(false)
 
@@ -82,7 +94,7 @@ export function useTracker() {
       (timer.status === 'RUNNING' ? Math.max(0, Math.floor((clock - timerAt) / 1000)) : 0)
     : 0
 
-  const todayDate = dateInTimezone(user.timezone)
+  const todayDate = dateInTimezone(selectedTimezone)
 
   const currentWeekStart = mondayOfWeek(todayDate)
 
@@ -108,16 +120,19 @@ export function useTracker() {
     setWeekSummary(null)
   }
 
-  const receiveTimer = useCallback((value: ActiveTimer | null) => {
-    setTimer(value)
-    setTimerAt(Date.now())
-    if (value) {
-      setTimerProject(value.projectId)
-      setTimerDescription(value.description)
-      setTimerTags(value.tagIds)
-      setTimerTicketIDs(value.ticketIds ?? [])
-    }
-  }, [])
+  const receiveTimer = useCallback(
+    (value: ActiveTimer | null) => {
+      setTimerSnapshot({ scope: timerScope, value })
+      setTimerAt(Date.now())
+      if (value) {
+        setTimerProject(value.projectId)
+        setTimerDescription(value.description)
+        setTimerTags(value.tagIds)
+        setTimerTicketIDs(value.ticketIds ?? [])
+      }
+    },
+    [timerScope],
+  )
 
   const loadTimer = useCallback(async () => {
     if (!organizationID) {
@@ -125,21 +140,21 @@ export function useTracker() {
       return
     }
     const result = await api<ActiveTimer | null>(
-      `/timer/active?organizationId=${encodeURIComponent(organizationID)}`,
+      `/timer/active?organizationId=${encodeURIComponent(organizationID)}${userQuery}`,
     )
     if (!result.error) receiveTimer(result.data)
-  }, [organizationID, receiveTimer])
+  }, [organizationID, userQuery, receiveTimer])
 
   const loadTodayEntries = useCallback(async () => {
     if (!organizationID) {
       setEntries([])
       return
     }
-    const result = await api<CompletedEntry[]>(
-      `/time-entries/today?organizationId=${encodeURIComponent(organizationID)}&date=${encodeURIComponent(selectedDate)}`,
+    const result = await api<TodayEntry[]>(
+      `/time-entries/today?organizationId=${encodeURIComponent(organizationID)}&date=${encodeURIComponent(selectedDate)}${userQuery}`,
     )
     if (!result.error) setEntries(result.data)
-  }, [organizationID, selectedDate])
+  }, [organizationID, selectedDate, userQuery])
 
   const loadWeekSummary = useCallback(async () => {
     const requestID = ++weekRequestRef.current
@@ -148,10 +163,11 @@ export function useTracker() {
       setCurrentWeekSummary(null)
       return
     }
-    const base = `/time-entries/week-summary?organizationId=${encodeURIComponent(organizationID)}`
+    const base = `/time-entries/week-summary?organizationId=${encodeURIComponent(organizationID)}${userQuery}`
     const cache = currentWeekCacheRef.current
     const cachedCurrent =
       cache?.organizationID === organizationID &&
+      cache.userID === trackerUserID &&
       cache.weekStart === currentWeekStart &&
       cache.entriesRevision === entriesRevision
         ? cache.summary
@@ -163,6 +179,7 @@ export function useTracker() {
     if (!current.error) {
       currentWeekCacheRef.current = {
         organizationID,
+        userID: trackerUserID,
         weekStart: currentWeekStart,
         entriesRevision,
         summary: current.data,
@@ -180,7 +197,15 @@ export function useTracker() {
         (current.error ?? selected.error)?.message ?? 'Unable to load weekly totals.',
         'error',
       )
-  }, [organizationID, currentWeekStart, selectedWeekStart, entriesRevision, setMessage])
+  }, [
+    organizationID,
+    trackerUserID,
+    userQuery,
+    currentWeekStart,
+    selectedWeekStart,
+    entriesRevision,
+    setMessage,
+  ])
 
   function toggleTag(id: string) {
     setTimerTags((values) =>
@@ -195,7 +220,7 @@ export function useTracker() {
   }
 
   async function startTimer() {
-    if (!organizationID || !timerProject || !timerDescription.trim()) return
+    if (readOnly || !organizationID || !timerProject || !timerDescription.trim()) return
     setBusy(true)
     const result = await api<ActiveTimer>('/timer/start', {
       method: 'POST',
@@ -218,7 +243,7 @@ export function useTracker() {
 
   async function createManualEntry(event: FormEvent) {
     event.preventDefault()
-    if (!organizationID || !manualProject || !manualDescription.trim()) return
+    if (readOnly || !organizationID || !manualProject || !manualDescription.trim()) return
     const startedAt = new Date(manualStartedAt)
     const body =
       manualMode === 'end'
@@ -256,7 +281,7 @@ export function useTracker() {
   }
 
   async function timerAction(action: 'pause' | 'resume' | 'stop') {
-    if (!timer) return
+    if (readOnly || !timer) return
     setBusy(true)
     const result = await api<ActiveTimer>(`/timer/${action}`, {
       method: 'POST',
@@ -272,7 +297,8 @@ export function useTracker() {
   }
 
   async function saveTimer() {
-    if (!timer || timer.organizationId !== organizationID || !timerDescription.trim()) return
+    if (readOnly || !timer || timer.organizationId !== organizationID || !timerDescription.trim())
+      return
     setBusy(true)
     const result = await api<ActiveTimer>('/timer/active', {
       method: 'PATCH',
@@ -309,6 +335,8 @@ export function useTracker() {
     return () => window.clearInterval(id)
   }, [])
   return {
+    readOnly,
+    selectedTimezone,
     timer,
     elapsed,
     activeOrganization,

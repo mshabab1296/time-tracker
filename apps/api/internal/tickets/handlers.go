@@ -3,6 +3,7 @@ package tickets
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -108,8 +109,12 @@ func (handler Handler) Get(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (handler Handler) Create(writer http.ResponseWriter, request *http.Request) {
-	organizationID, actorID, _, ok := handler.authorize(writer, request, true)
+	organizationID, actorID, role, ok := handler.authorize(writer, request, true)
 	if !ok {
+		return
+	}
+	if role != "ADMIN" {
+		errorResponse(writer, 403, "FORBIDDEN", "Only an Admin can manage tickets.")
 		return
 	}
 	input, ok := readInput(writer, request)
@@ -122,7 +127,12 @@ func (handler Handler) Create(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	var item ticket
-	err = handler.Database.QueryRow(request.Context(), `INSERT INTO tickets (id, organization_id, created_by_user_id, reference, title) VALUES ($1, $2, $3, $4, $5) RETURNING id, organization_id, created_by_user_id, reference, title, created_at`, id, organizationID, actorID, input.Reference, input.Title).Scan(&item.ID, &item.OrganizationID, &item.CreatedByUserID, &item.Reference, &item.Title, &item.CreatedAt)
+	tx, _, ok := handler.beginWrite(writer, request, organizationID, actorID)
+	if !ok {
+		return
+	}
+	defer tx.Rollback(request.Context())
+	err = tx.QueryRow(request.Context(), `INSERT INTO tickets (id, organization_id, created_by_user_id, reference, title) VALUES ($1, $2, $3, $4, $5) RETURNING id, organization_id, created_by_user_id, reference, title, created_at`, id, organizationID, actorID, input.Reference, input.Title).Scan(&item.ID, &item.OrganizationID, &item.CreatedByUserID, &item.Reference, &item.Title, &item.CreatedAt)
 	if duplicate(err) {
 		errorResponse(writer, 409, "TICKET_REFERENCE_EXISTS", "A ticket with this reference already exists.")
 		return
@@ -131,12 +141,19 @@ func (handler Handler) Create(writer http.ResponseWriter, request *http.Request)
 		errorResponse(writer, 500, "INTERNAL_ERROR", "Unable to create ticket.")
 		return
 	}
-	handler.audit(request, organizationID, actorID, "TICKET_CREATED", id)
+	if err := audit(request, tx, organizationID, actorID, "TICKET_CREATED", id); err != nil {
+		errorResponse(writer, 500, "INTERNAL_ERROR", "Unable to create ticket.")
+		return
+	}
+	if err := tx.Commit(request.Context()); err != nil {
+		errorResponse(writer, 500, "INTERNAL_ERROR", "Unable to create ticket.")
+		return
+	}
 	respond(writer, 201, item)
 }
 
 func (handler Handler) Update(writer http.ResponseWriter, request *http.Request) {
-	organizationID, actorID, role, ok := handler.authorize(writer, request, true)
+	organizationID, actorID, _, ok := handler.authorize(writer, request, true)
 	if !ok {
 		return
 	}
@@ -149,7 +166,12 @@ func (handler Handler) Update(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	var item ticket
-	err := handler.Database.QueryRow(request.Context(), `UPDATE tickets SET reference = $1, title = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3 AND organization_id = $4 AND (created_by_user_id = $5 OR $6 = 'ADMIN') RETURNING id, organization_id, created_by_user_id, reference, title, created_at`, input.Reference, input.Title, id, organizationID, actorID, role).Scan(&item.ID, &item.OrganizationID, &item.CreatedByUserID, &item.Reference, &item.Title, &item.CreatedAt)
+	tx, _, ok := handler.beginWrite(writer, request, organizationID, actorID)
+	if !ok {
+		return
+	}
+	defer tx.Rollback(request.Context())
+	err := tx.QueryRow(request.Context(), `UPDATE tickets SET reference = $1, title = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3 AND organization_id = $4 RETURNING id, organization_id, created_by_user_id, reference, title, created_at`, input.Reference, input.Title, id, organizationID).Scan(&item.ID, &item.OrganizationID, &item.CreatedByUserID, &item.Reference, &item.Title, &item.CreatedAt)
 	if duplicate(err) {
 		errorResponse(writer, 409, "TICKET_REFERENCE_EXISTS", "A ticket with this reference already exists.")
 		return
@@ -162,12 +184,19 @@ func (handler Handler) Update(writer http.ResponseWriter, request *http.Request)
 		errorResponse(writer, 500, "INTERNAL_ERROR", "Unable to update ticket.")
 		return
 	}
-	handler.audit(request, organizationID, actorID, "TICKET_UPDATED", id)
+	if err := audit(request, tx, organizationID, actorID, "TICKET_UPDATED", id); err != nil {
+		errorResponse(writer, 500, "INTERNAL_ERROR", "Unable to update ticket.")
+		return
+	}
+	if err := tx.Commit(request.Context()); err != nil {
+		errorResponse(writer, 500, "INTERNAL_ERROR", "Unable to update ticket.")
+		return
+	}
 	respond(writer, 200, item)
 }
 
 func (handler Handler) Delete(writer http.ResponseWriter, request *http.Request) {
-	organizationID, actorID, role, ok := handler.authorize(writer, request, true)
+	organizationID, actorID, _, ok := handler.authorize(writer, request, true)
 	if !ok {
 		return
 	}
@@ -175,7 +204,12 @@ func (handler Handler) Delete(writer http.ResponseWriter, request *http.Request)
 	if !ok {
 		return
 	}
-	command, err := handler.Database.Exec(request.Context(), `DELETE FROM tickets WHERE id = $1 AND organization_id = $2 AND (created_by_user_id = $3 OR $4 = 'ADMIN')`, id, organizationID, actorID, role)
+	tx, _, ok := handler.beginWrite(writer, request, organizationID, actorID)
+	if !ok {
+		return
+	}
+	defer tx.Rollback(request.Context())
+	command, err := tx.Exec(request.Context(), `DELETE FROM tickets WHERE id = $1 AND organization_id = $2`, id, organizationID)
 	if referenced(err) {
 		errorResponse(writer, 409, "TICKET_IN_USE", "A ticket with time entries cannot be deleted.")
 		return
@@ -188,7 +222,14 @@ func (handler Handler) Delete(writer http.ResponseWriter, request *http.Request)
 		errorResponse(writer, 404, "TICKET_NOT_FOUND", "Ticket not found or not deletable.")
 		return
 	}
-	handler.audit(request, organizationID, actorID, "TICKET_DELETED", id)
+	if err := audit(request, tx, organizationID, actorID, "TICKET_DELETED", id); err != nil {
+		errorResponse(writer, 500, "INTERNAL_ERROR", "Unable to delete ticket.")
+		return
+	}
+	if err := tx.Commit(request.Context()); err != nil {
+		errorResponse(writer, 500, "INTERNAL_ERROR", "Unable to delete ticket.")
+		return
+	}
 	respond(writer, 200, map[string]bool{"deleted": true})
 }
 
@@ -227,8 +268,14 @@ func ticketID(writer http.ResponseWriter, request *http.Request) (uuid.UUID, boo
 
 func readInput(writer http.ResponseWriter, request *http.Request) (ticketInput, bool) {
 	var input ticketInput
-	if err := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 1<<20)).Decode(&input); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
 		errorResponse(writer, 400, "VALIDATION_ERROR", "Provide a valid ticket.")
+		return input, false
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		errorResponse(writer, 400, "VALIDATION_ERROR", "Provide a single ticket object.")
 		return input, false
 	}
 	input.Reference, input.Title = strings.TrimSpace(input.Reference), strings.TrimSpace(input.Title)
@@ -239,11 +286,38 @@ func readInput(writer http.ResponseWriter, request *http.Request) (ticketInput, 
 	return input, true
 }
 
-func (handler Handler) audit(request *http.Request, organizationID, actorID uuid.UUID, action string, id uuid.UUID) {
-	auditID, err := uuid.NewV7()
-	if err == nil {
-		_, _ = handler.Database.Exec(request.Context(), `INSERT INTO audit_logs (id, organization_id, actor_user_id, action, target_type, target_id) VALUES ($1, $2, $3, $4, 'TICKET', $5)`, auditID, organizationID, actorID, action, id)
+func (handler Handler) beginWrite(writer http.ResponseWriter, request *http.Request, organizationID, actorID uuid.UUID) (pgx.Tx, string, bool) {
+	tx, err := handler.Database.Begin(request.Context())
+	if err != nil {
+		errorResponse(writer, 500, "INTERNAL_ERROR", "Unable to change ticket.")
+		return nil, "", false
 	}
+	var role string
+	err = tx.QueryRow(request.Context(), `SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2 FOR SHARE`, organizationID, actorID).Scan(&role)
+	if err != nil {
+		_ = tx.Rollback(request.Context())
+		if errors.Is(err, pgx.ErrNoRows) {
+			errorResponse(writer, 403, "FORBIDDEN", "Organization membership is required.")
+		} else {
+			errorResponse(writer, 500, "INTERNAL_ERROR", "Unable to change ticket.")
+		}
+		return nil, "", false
+	}
+	if role != "ADMIN" {
+		_ = tx.Rollback(request.Context())
+		errorResponse(writer, 403, "FORBIDDEN", "Only an Admin can manage tickets.")
+		return nil, "", false
+	}
+	return tx, role, true
+}
+
+func audit(request *http.Request, tx pgx.Tx, organizationID, actorID uuid.UUID, action string, id uuid.UUID) error {
+	auditID, err := uuid.NewV7()
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(request.Context(), `INSERT INTO audit_logs (id, organization_id, actor_user_id, action, target_type, target_id) VALUES ($1, $2, $3, $4, 'TICKET', $5)`, auditID, organizationID, actorID, action, id)
+	return err
 }
 
 func duplicate(err error) bool {

@@ -29,9 +29,19 @@ func (handler VerifyEmailHandler) ServeHTTP(writer http.ResponseWriter, request 
 	}
 	defer tx.Rollback(request.Context())
 	var userID string
-	err = tx.QueryRow(request.Context(), `SELECT user_id FROM email_action_tokens WHERE token_hash = $1 AND action_type = 'EMAIL_VERIFICATION' AND used_at IS NULL AND expires_at > $2 FOR UPDATE`, tokenHash(input.Token), time.Now().UTC()).Scan(&userID)
+	var usedAt *time.Time
+	err = tx.QueryRow(request.Context(), `SELECT user_id, used_at FROM email_action_tokens WHERE token_hash = $1 AND action_type = 'EMAIL_VERIFICATION' AND expires_at > $2 FOR UPDATE`, tokenHash(input.Token), time.Now().UTC()).Scan(&userID, &usedAt)
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, "INVALID_OR_EXPIRED_TOKEN", "The verification token is invalid or expired.")
+		return
+	}
+	if usedAt != nil {
+		var verified bool
+		if err = tx.QueryRow(request.Context(), `SELECT email_verified_at IS NOT NULL FROM users WHERE id = $1`, userID).Scan(&verified); err != nil || !verified {
+			writeError(writer, http.StatusBadRequest, "INVALID_OR_EXPIRED_TOKEN", "The verification token is invalid or expired.")
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"data": map[string]bool{"emailVerified": true}, "error": nil, "meta": map[string]any{}})
 		return
 	}
 	if _, err = tx.Exec(request.Context(), `UPDATE email_action_tokens SET used_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE token_hash = $1`, tokenHash(input.Token)); err != nil {

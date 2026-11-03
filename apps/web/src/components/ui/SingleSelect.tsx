@@ -24,6 +24,7 @@ export function SingleSelect({
   const [activeIndex, setActiveIndex] = useState(0)
   const listId = useId()
   const selected = options.find((option) => option.value === value)
+  const focusedIndex = Math.max(0, Math.min(activeIndex, options.length - 1))
 
   function choose(nextValue: string) {
     onValueChange(nextValue)
@@ -40,6 +41,11 @@ export function SingleSelect({
       <button
         type="button"
         className="single-select-field"
+        role="combobox"
+        aria-autocomplete="none"
+        aria-activedescendant={
+          open && options[focusedIndex] ? `${listId}-option-${focusedIndex}` : undefined
+        }
         aria-label={label}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -56,23 +62,37 @@ export function SingleSelect({
           setOpen((current) => !current)
         }}
         onKeyDown={(event) => {
-          if (event.key === 'Escape') {
+          if (event.key === 'Escape' && open) {
+            event.preventDefault()
+            event.stopPropagation()
             setOpen(false)
             return
           }
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
             event.preventDefault()
             setOpen(true)
-            setActiveIndex((index) =>
+            setActiveIndex(
               Math.max(
                 0,
-                Math.min(options.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)),
+                Math.min(
+                  options.length - 1,
+                  open
+                    ? focusedIndex + (event.key === 'ArrowDown' ? 1 : -1)
+                    : Math.max(
+                        0,
+                        options.findIndex((option) => option.value === value),
+                      ),
+                ),
               ),
             )
           }
-          if (event.key === 'Enter' && open && options[activeIndex]) {
+          if (open && (event.key === 'Home' || event.key === 'End')) {
             event.preventDefault()
-            choose(options[activeIndex].value)
+            setActiveIndex(event.key === 'Home' ? 0 : options.length - 1)
+          }
+          if ((event.key === 'Enter' || event.key === ' ') && open && options[focusedIndex]) {
+            event.preventDefault()
+            choose(options[focusedIndex].value)
           }
         }}
       >
@@ -93,7 +113,7 @@ export function SingleSelect({
           label={label}
           options={options}
           value={value}
-          activeIndex={activeIndex}
+          activeIndex={focusedIndex}
           onChoose={choose}
         />
       )}

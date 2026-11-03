@@ -52,8 +52,12 @@ func (handler PasswordResetConfirmHandler) ServeHTTP(writer http.ResponseWriter,
 	if !decodeBody(writer, request, &input) {
 		return
 	}
-	if input.Token == "" || len(input.Password) < 12 {
-		writeError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "Provide a valid reset token and a password of at least 12 characters.")
+	if input.Token == "" {
+		writeError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "Provide a valid reset token.")
+		return
+	}
+	if !validNewPassword(input.Password) {
+		writeError(writer, http.StatusBadRequest, "VALIDATION_ERROR", passwordRequirements)
 		return
 	}
 	passwordHash, err := hashPassword(input.Password)

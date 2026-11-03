@@ -9,7 +9,7 @@ export const pages: Record<Page, { icon: string; title: string; description: str
   entries: {
     icon: '☷',
     title: 'Entries',
-    description: 'Review completed work in this workspace.',
+    description: 'Browse completed work in this workspace.',
   },
   reports: {
     icon: '▤',

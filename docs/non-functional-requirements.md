@@ -18,6 +18,8 @@ The initial-capacity and API-latency targets shall be verified with repeatable l
 
 Paginated API endpoints shall enforce a maximum page size of **100 records**. A report or CSV export request shall process no more than **10,000 time entries**.
 
+Summary grouping shall process at most **10,000 distinct groups** and **1,000,000 grouped contributions**, walking tag × ticket combinations incrementally rather than allocating the full Cartesian product. Exceeding either limit shall return HTTP 422 `REPORT_COMPLEXITY_EXCEEDED`, with guidance to narrow the range, filters, or groupings. Results shall never be silently truncated and failed exports shall not return partial CSV.
+
 V1 reports shall render directly in the UI with pagination. Clicking Download shall generate and return the CSV immediately. V1 shall not use asynchronous export jobs, SSE export progress, or server/S3-persisted generated files. V1 does not set a separate CSV-download latency target.
 
 ## 2. Availability and Reliability
@@ -135,6 +137,8 @@ The web UI shall be responsive and usable on desktop and mobile browsers.
 V1 shall support current major versions of Chrome, Edge, Firefox, and Safari.
 
 Core workflows shall be keyboard accessible and expose accessible labels for controls and form fields to support screen readers.
+
+Both light and dark themes shall preserve readable text, distinguishable controls, and visible keyboard focus states.
 
 ## 8. Architecture Decision
 

@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// TodayEntries returns the signed-in user's completed entries overlapping the
+// TodayEntries returns the selected user's completed entries overlapping the
 // requested local calendar day. When date is omitted, it defaults to today.
 func (handler Handler) TodayEntries(writer http.ResponseWriter, request *http.Request) {
 	userID, ok := auth.AuthenticatedUserIDForRead(writer, request, handler.Database)
@@ -16,6 +16,10 @@ func (handler Handler) TodayEntries(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	organizationID, ok := requestedOrganization(writer, request, handler, userID)
+	if !ok {
+		return
+	}
+	userID, ok = requestedTrackerUser(writer, request, handler, organizationID, userID)
 	if !ok {
 		return
 	}
@@ -79,6 +83,7 @@ func (handler Handler) TodayEntries(writer http.ResponseWriter, request *http.Re
 	rows.Close()
 	entries := make([]map[string]any, 0, len(loaded))
 	for _, item := range loaded {
+		dayStartedAt, dayEndedAt := clippedRange(item.startedAt, item.endedAt, dayStart, dayEnd)
 		durationSeconds := clippedDuration(item.startedAt, item.endedAt, dayStart, dayEnd)
 		if item.sourceType == "TIMER" {
 			durationSeconds, err = handler.timerDurationInRange(request, item.id, dayStart, dayEnd)
@@ -87,7 +92,7 @@ func (handler Handler) TodayEntries(writer http.ResponseWriter, request *http.Re
 				return
 			}
 		}
-		entries = append(entries, map[string]any{"id": item.id, "projectName": item.projectName, "ticketReferences": item.ticketReferences, "description": item.description, "startedAt": item.startedAt, "endedAt": item.endedAt, "durationSeconds": durationSeconds, "sourceType": item.sourceType, "tags": item.tags})
+		entries = append(entries, map[string]any{"id": item.id, "projectName": item.projectName, "ticketReferences": item.ticketReferences, "description": item.description, "startedAt": item.startedAt, "endedAt": item.endedAt, "dayStartedAt": dayStartedAt, "dayEndedAt": dayEndedAt, "durationSeconds": durationSeconds, "sourceType": item.sourceType, "tags": item.tags})
 	}
 	respond(writer, http.StatusOK, entries)
 }
@@ -118,16 +123,21 @@ func (handler Handler) timerDurationInRange(request *http.Request, entryID uuid.
 }
 
 func clippedDuration(startedAt, endedAt, rangeStart, rangeEnd time.Time) int64 {
+	startedAt, endedAt = clippedRange(startedAt, endedAt, rangeStart, rangeEnd)
+	if !endedAt.After(startedAt) {
+		return 0
+	}
+	return int64(endedAt.Sub(startedAt).Seconds())
+}
+
+func clippedRange(startedAt, endedAt, rangeStart, rangeEnd time.Time) (time.Time, time.Time) {
 	if startedAt.Before(rangeStart) {
 		startedAt = rangeStart
 	}
 	if endedAt.After(rangeEnd) {
 		endedAt = rangeEnd
 	}
-	if !endedAt.After(startedAt) {
-		return 0
-	}
-	return int64(endedAt.Sub(startedAt).Seconds())
+	return startedAt, endedAt
 }
 
 // WeekSummary returns the signed-in user's completed time for the requested
@@ -139,6 +149,10 @@ func (handler Handler) WeekSummary(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	organizationID, ok := requestedOrganization(writer, request, handler, userID)
+	if !ok {
+		return
+	}
+	userID, ok = requestedTrackerUser(writer, request, handler, organizationID, userID)
 	if !ok {
 		return
 	}
@@ -277,4 +291,28 @@ func requestedOrganization(writer http.ResponseWriter, request *http.Request, ha
 		return uuid.Nil, false
 	}
 	return organizationID, true
+}
+
+// requestedTrackerUser permits an Admin to inspect a current member's tracker.
+// All write endpoints continue to derive the owner from the authenticated session.
+func requestedTrackerUser(writer http.ResponseWriter, request *http.Request, handler Handler, organizationID, actorID uuid.UUID) (uuid.UUID, bool) {
+	value := request.URL.Query().Get("userId")
+	if value == "" {
+		return actorID, true
+	}
+	targetID, err := uuid.Parse(value)
+	if err != nil || targetID == uuid.Nil {
+		respondError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "User identifier is invalid.")
+		return uuid.Nil, false
+	}
+	if targetID == actorID {
+		return actorID, true
+	}
+	var allowed bool
+	err = handler.Database.QueryRow(request.Context(), `SELECT EXISTS(SELECT 1 FROM memberships actor JOIN memberships target ON target.organization_id = actor.organization_id WHERE actor.organization_id = $1 AND actor.user_id = $2 AND actor.role = 'ADMIN' AND target.user_id = $3)`, organizationID, actorID, targetID).Scan(&allowed)
+	if err != nil || !allowed {
+		respondError(writer, http.StatusForbidden, "FORBIDDEN", "You cannot view this member's tracker.")
+		return uuid.Nil, false
+	}
+	return targetID, true
 }

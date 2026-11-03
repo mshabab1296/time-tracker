@@ -27,10 +27,11 @@ type RegisterHandler struct {
 	WebBaseURL string
 }
 type registerRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	Name     string `json:"name"`
-	Timezone string `json:"timezone"`
+	Email           string `json:"email"`
+	Password        string `json:"password"`
+	Name            string `json:"name"`
+	Timezone        string `json:"timezone"`
+	InvitationToken string `json:"invitationToken"`
 }
 
 func (handler RegisterHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -45,8 +46,12 @@ func (handler RegisterHandler) ServeHTTP(writer http.ResponseWriter, request *ht
 	if timezone == "" {
 		timezone = "UTC"
 	}
-	if _, err := mail.ParseAddress(email); err != nil || len(email) > 320 || name == "" || len(name) > 100 || len(input.Password) < 12 {
-		writeError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "Provide a valid email, name, and password of at least 12 characters.")
+	if _, err := mail.ParseAddress(email); err != nil || len(email) > 320 || name == "" || len(name) > 100 {
+		writeError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "Provide a valid email and name.")
+		return
+	}
+	if !validNewPassword(input.Password) {
+		writeError(writer, http.StatusBadRequest, "VALIDATION_ERROR", passwordRequirements)
 		return
 	}
 	if _, err := time.LoadLocation(timezone); err != nil {
@@ -58,17 +63,7 @@ func (handler RegisterHandler) ServeHTTP(writer http.ResponseWriter, request *ht
 		writeError(writer, 500, "INTERNAL_ERROR", "Unable to register the account.")
 		return
 	}
-	token, err := randomToken()
-	if err != nil {
-		writeError(writer, 500, "INTERNAL_ERROR", "Unable to register the account.")
-		return
-	}
 	userID, err := uuid.NewV7()
-	if err != nil {
-		writeError(writer, 500, "INTERNAL_ERROR", "Unable to register the account.")
-		return
-	}
-	tokenID, err := uuid.NewV7()
 	if err != nil {
 		writeError(writer, 500, "INTERNAL_ERROR", "Unable to register the account.")
 		return
@@ -79,7 +74,22 @@ func (handler RegisterHandler) ServeHTTP(writer http.ResponseWriter, request *ht
 		return
 	}
 	defer tx.Rollback(request.Context())
-	_, err = tx.Exec(request.Context(), `INSERT INTO users (id, email, password_hash, name, timezone) VALUES ($1, $2, $3, $4, $5)`, userID, email, passwordHash, name, timezone)
+	invited := input.InvitationToken != ""
+	var verifiedAt any
+	if invited {
+		var invitationID uuid.UUID
+		err = tx.QueryRow(request.Context(), `SELECT id FROM invitations WHERE token_hash = $1 AND email = $2 AND status = 'PENDING' AND expires_at > CURRENT_TIMESTAMP FOR UPDATE`, tokenHash(input.InvitationToken), email).Scan(&invitationID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(writer, http.StatusBadRequest, "INVITATION_NOT_AVAILABLE", "The invitation link is invalid, expired, or belongs to another email address.")
+			return
+		}
+		if err != nil {
+			writeError(writer, 500, "INTERNAL_ERROR", "Unable to validate the invitation.")
+			return
+		}
+		verifiedAt = time.Now().UTC()
+	}
+	_, err = tx.Exec(request.Context(), `INSERT INTO users (id, email, password_hash, name, timezone, email_verified_at) VALUES ($1, $2, $3, $4, $5, $6)`, userID, email, passwordHash, name, timezone, verifiedAt)
 	if err != nil {
 		var dbError *pgconn.PgError
 		if errors.As(err, &dbError) && dbError.Code == "23505" {
@@ -89,13 +99,30 @@ func (handler RegisterHandler) ServeHTTP(writer http.ResponseWriter, request *ht
 		writeError(writer, 500, "INTERNAL_ERROR", "Unable to register the account.")
 		return
 	}
-	_, err = tx.Exec(request.Context(), `INSERT INTO email_action_tokens (id, user_id, token_hash, action_type, expires_at) VALUES ($1, $2, $3, 'EMAIL_VERIFICATION', $4)`, tokenID, userID, tokenHash(token), time.Now().UTC().Add(24*time.Hour))
-	if err != nil {
-		writeError(writer, 500, "INTERNAL_ERROR", "Unable to register the account.")
-		return
+	var token string
+	if !invited {
+		token, err = randomToken()
+		if err != nil {
+			writeError(writer, 500, "INTERNAL_ERROR", "Unable to register the account.")
+			return
+		}
+		tokenID, idErr := uuid.NewV7()
+		if idErr != nil {
+			writeError(writer, 500, "INTERNAL_ERROR", "Unable to register the account.")
+			return
+		}
+		_, err = tx.Exec(request.Context(), `INSERT INTO email_action_tokens (id, user_id, token_hash, action_type, expires_at) VALUES ($1, $2, $3, 'EMAIL_VERIFICATION', $4)`, tokenID, userID, tokenHash(token), time.Now().UTC().Add(24*time.Hour))
+		if err != nil {
+			writeError(writer, 500, "INTERNAL_ERROR", "Unable to register the account.")
+			return
+		}
 	}
 	if err := tx.Commit(request.Context()); err != nil {
 		writeError(writer, 500, "INTERNAL_ERROR", "Unable to register the account.")
+		return
+	}
+	if invited {
+		writeJSON(writer, http.StatusCreated, map[string]any{"data": map[string]any{"id": userID, "email": email, "emailVerified": true}, "error": nil, "meta": map[string]any{}})
 		return
 	}
 	verificationURL := strings.TrimRight(handler.WebBaseURL, "/") + "/verify-email?token=" + token

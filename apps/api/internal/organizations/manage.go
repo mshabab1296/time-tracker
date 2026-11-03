@@ -60,7 +60,7 @@ func (handler MembersHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 	if !ok {
 		return
 	}
-	rows, err := handler.Database.Query(request.Context(), `SELECT u.id, u.email, u.name, m.role, m.created_at FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.organization_id = $1 ORDER BY u.name`, organizationID)
+	rows, err := handler.Database.Query(request.Context(), `SELECT u.id, u.email, u.name, u.timezone, m.role, m.created_at FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.organization_id = $1 ORDER BY u.name`, organizationID)
 	if err != nil {
 		respondError(writer, 500, "INTERNAL_ERROR", "Unable to load members.")
 		return
@@ -69,13 +69,13 @@ func (handler MembersHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 	members := make([]map[string]any, 0)
 	for rows.Next() {
 		var id uuid.UUID
-		var email, name, role string
+		var email, name, timezone, role string
 		var createdAt time.Time
-		if err := rows.Scan(&id, &email, &name, &role, &createdAt); err != nil {
+		if err := rows.Scan(&id, &email, &name, &timezone, &role, &createdAt); err != nil {
 			respondError(writer, 500, "INTERNAL_ERROR", "Unable to load members.")
 			return
 		}
-		members = append(members, map[string]any{"id": id, "email": email, "name": name, "role": role, "createdAt": createdAt})
+		members = append(members, map[string]any{"id": id, "email": email, "name": name, "timezone": timezone, "role": role, "createdAt": createdAt})
 	}
 	if err := rows.Err(); err != nil {
 		respondError(writer, 500, "INTERNAL_ERROR", "Unable to load members.")

@@ -5,7 +5,7 @@ import type { Ticket, TicketPage } from '../../types/domain'
 import { useWorkspace } from '../dashboard/WorkspaceContext'
 
 export function TicketsPage() {
-  const { organizationID, user, isAdmin, setMessage } = useWorkspace()
+  const { organizationID, isAdmin, setMessage } = useWorkspace()
   const [page, setPage] = useState<TicketPage | null>(null)
   const [query, setQuery] = useState('')
   const [offset, setOffset] = useState(0)
@@ -71,44 +71,46 @@ export function TicketsPage() {
         </div>
         <span className="count-chip">{page?.total ?? 0}</span>
       </div>
-      <form className="ticket-form" onSubmit={(event) => void save(event)}>
-        <label>
-          Reference
-          <input
-            value={reference}
-            onChange={(event) => setReference(event.target.value)}
-            maxLength={100}
-            placeholder="PROJ-123"
-            required
-          />
-        </label>
-        <label>
-          Title
-          <input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            maxLength={200}
-            placeholder="Investigate login issue"
-            required
-          />
-        </label>
-        <button disabled={busy || !reference.trim() || !title.trim()}>
-          {editing ? 'Save' : 'Add'}
-        </button>
-        {editing && (
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => {
-              setEditing(null)
-              setReference('')
-              setTitle('')
-            }}
-          >
-            Cancel
+      {isAdmin && (
+        <form className="ticket-form" onSubmit={(event) => void save(event)}>
+          <label>
+            Reference
+            <input
+              value={reference}
+              onChange={(event) => setReference(event.target.value)}
+              maxLength={100}
+              placeholder="PROJ-123"
+              required
+            />
+          </label>
+          <label>
+            Title
+            <input
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              maxLength={200}
+              placeholder="Investigate login issue"
+              required
+            />
+          </label>
+          <button disabled={busy || !reference.trim() || !title.trim()}>
+            {editing ? 'Save' : 'Add'}
           </button>
-        )}
-      </form>
+          {editing && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                setEditing(null)
+                setReference('')
+                setTitle('')
+              }}
+            >
+              Cancel
+            </button>
+          )}
+        </form>
+      )}
       <label className="ticket-search">
         Search tickets
         <input
@@ -127,7 +129,7 @@ export function TicketsPage() {
               <strong>{ticket.reference}</strong>
               <small>{ticket.title}</small>
             </div>
-            {(isAdmin || ticket.createdByUserId === user.id) && (
+            {isAdmin && (
               <span className="row-actions">
                 <IconButton
                   label={`Edit ${ticket.reference}`}

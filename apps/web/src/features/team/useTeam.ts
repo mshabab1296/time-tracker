@@ -1,9 +1,11 @@
 import { useState, type FormEvent } from 'react'
+import { useNavigate } from 'react-router'
 import { api } from '../../api/client'
 import type { Invitation, Member, SentInvitation } from '../../types/domain'
 import { useWorkspace } from '../dashboard/WorkspaceContext'
 
 export function useTeam() {
+  const navigate = useNavigate()
   const {
     organizationID,
     isAdmin,
@@ -13,6 +15,7 @@ export function useTeam() {
     loadResources,
     loadIncoming,
     loadOrganizations,
+    selectOrganization,
     setMessage,
   } = useWorkspace()
   const [inviteEmail, setInviteEmail] = useState('')
@@ -56,14 +59,21 @@ export function useTeam() {
   }
 
   async function decide(invitation: Invitation, decision: 'accept' | 'decline') {
-    const result = await api<unknown>(`/invitations/${invitation.id}/${decision}`, {
-      method: 'POST',
-    })
+    const result = await api<{ organizationId: string }>(
+      `/invitations/${invitation.id}/${decision}`,
+      {
+        method: 'POST',
+      },
+    )
     if (result.error) setMessage(result.error.message, 'error')
     else {
       await loadIncoming()
       await loadOrganizations()
-      setMessage(`Invitation ${decision}ed.`)
+      if (decision === 'accept') {
+        selectOrganization(result.data.organizationId)
+        navigate('/tracker')
+      }
+      setMessage(decision === 'accept' ? 'Invitation accepted.' : 'Invitation declined.')
     }
   }
 

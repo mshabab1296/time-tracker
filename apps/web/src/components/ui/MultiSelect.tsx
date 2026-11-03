@@ -1,4 +1,4 @@
-import { useId } from 'react'
+import { useId, useState } from 'react'
 import { SelectOptions } from './SelectOptions'
 
 export type MultiSelectOption = { id: string; label: string; description?: string }
@@ -37,6 +37,8 @@ export function MultiSelect({
   showEmptyOnOpen = false,
 }: Props) {
   const listId = useId()
+  const [activeIndex, setActiveIndex] = useState(0)
+  const focusedIndex = Math.max(0, Math.min(activeIndex, options.length - 1))
   const visible = open && (options.length > 0 || query.trim().length > 0 || showEmptyOnOpen)
 
   function choose(id: string) {
@@ -73,19 +75,40 @@ export function MultiSelect({
           aria-autocomplete="list"
           aria-expanded={visible}
           aria-controls={visible ? listId : undefined}
+          aria-activedescendant={
+            visible && options[focusedIndex] ? `${listId}-option-${focusedIndex}` : undefined
+          }
           placeholder={placeholder}
           value={query}
           disabled={disabled}
           onFocus={() => onOpenChange(true)}
           onChange={(event) => {
             onQueryChange(event.target.value)
+            setActiveIndex(0)
             onOpenChange(true)
           }}
           onKeyDown={(event) => {
-            if (event.key === 'Escape') onOpenChange(false)
-            if (event.key === 'Enter' && visible && options[0]) {
+            if (event.key === 'Escape' && open) {
               event.preventDefault()
-              choose(options[0].id)
+              event.stopPropagation()
+              onOpenChange(false)
+            }
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault()
+              onOpenChange(true)
+              setActiveIndex(
+                Math.max(
+                  0,
+                  Math.min(
+                    options.length - 1,
+                    visible ? focusedIndex + (event.key === 'ArrowDown' ? 1 : -1) : 0,
+                  ),
+                ),
+              )
+            }
+            if (event.key === 'Enter' && visible && options[focusedIndex]) {
+              event.preventDefault()
+              choose(options[focusedIndex].id)
             }
           }}
         />
@@ -100,6 +123,7 @@ export function MultiSelect({
             description: item.description,
           }))}
           value={selected.map((item) => item.id)}
+          activeIndex={focusedIndex}
           onChoose={choose}
           emptyMessage={emptyMessage}
         />

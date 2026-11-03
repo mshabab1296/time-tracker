@@ -15,6 +15,9 @@ TimeTracker is an organization-based application for recording working time and 
 5. A user shall be able to update their name and profile picture.
 6. A user shall not be able to change their email address in V1.
 7. A user shall not be able to delete their account in V1.
+8. New passwords at registration and reset shall contain at least 8 characters, one uppercase letter, and one number. Login shall continue to accept existing passwords.
+9. The registration form shall require matching Password and Confirm password fields. Password fields on registration, login, and reset screens shall offer an accessible show/hide button.
+10. The web app shall offer System, Light, and Dark appearance choices in Settings. System shall be the default and follow the device theme; an explicit choice shall override it and persist on the current device.
 
 ## 3. Organizations and Membership
 
@@ -31,20 +34,22 @@ TimeTracker is an organization-based application for recording working time and 
 
 1. V1 has two organization roles: `ADMIN` and `MEMBER`.
 2. An Admin can manage members, projects, tags, all organization tickets, and organization reports in their own organization.
-3. A Member can record and manage their own time, view their assigned projects, use organization tags, and manage tickets they created.
-4. An Admin can view, edit, and delete time entries for members of their own organization only.
-5. Members cannot manage projects, tags, or other members.
+3. A Member can record and manage their own time, view their assigned projects, and use organization tags and tickets.
+4. An Admin can view a current member's Tracker and completed entries, but cannot edit or delete that member's entries or operate their timer. Admins manage only their own entries.
+5. Members cannot manage projects, tags, tickets, or other members.
 
 ### FR-4 Invitations and removal
 
 1. An Admin shall be able to invite a person to their organization by email.
-2. If the email belongs to an existing account, the system shall create an in-app invitation. Otherwise, it shall send an email with signup/invitation instructions.
+2. The system shall email an invitation link to the invitee. If the email belongs to an existing account, the invitation shall also appear in-app.
 3. An invited person shall be able to accept or decline an invitation.
 4. An invitation shall expire seven days after it is issued.
 5. An Admin shall be able to resend a pending or expired invitation.
 6. An Admin shall be able to cancel a pending invitation.
 7. Resending shall refresh the existing invitation; it shall not create a second active invitation for the same organization and email.
 8. The system shall reject an invitation when that email is already a member of the organization.
+9. An existing account that opens a valid invitation link and signs in shall join the inviting organization automatically; pending invitations shall also be visible in-app for acceptance or decline.
+10. A new account created with a valid invitation link for the same email shall be considered email-verified without a second verification email. On sign-in through that link, the user shall join the inviting organization.
 9. Only an Admin can remove a Member. Members and Admins cannot leave an organization in V1, and Admin-transfer is out of scope.
 10. Removing a Member removes only their membership; it does not delete the user account or their memberships in other organizations.
 11. A removed Member's historical time entries shall remain unchanged and available in the organization's historical reports, but the removed Member shall no longer have organization access.
@@ -83,7 +88,7 @@ TimeTracker is an organization-based application for recording working time and 
 4. Renaming a ticket reference or title shall be reflected in entries and reports that reference it. A ticket with linked entries shall not be deletable, so historical reports retain their reference.
 5. Ticket search and management lists shall be server-filtered and paginated; the time-entry picker shall not require downloading every ticket in the organization.
 6. V1 tickets shall be created and maintained in TimeTracker. Synchronization with Jira or another ticket board, provider credentials, and bidirectional updates are deferred; the model shall not assume a Jira-only identifier.
-7. A Member may create ticket references in their organization and edit or delete only tickets they created. An Admin may create, edit, and delete any ticket in their organization. All current organization members may view and select its tickets, regardless of creator.
+7. Only an Admin may create, edit, or delete tickets in their organization. All current organization members may view and select its tickets, regardless of creator. Existing member-created tickets remain manageable by an Admin.
 8. Deletion is blocked while any time entry references the ticket, regardless of who requests it. Removing the creator from the organization shall not delete the ticket or change historical entries; the former Member loses ticket-management access there.
 
 ## 5. Time Tracking
@@ -118,14 +123,15 @@ TimeTracker is an organization-based application for recording working time and 
 ### FR-9 Entry management
 
 1. A Member shall be able to view, edit, and delete their own completed entries.
-2. An Admin shall be able to view, edit, and delete completed entries belonging to Members of their organization.
-3. For a completed timer-generated entry, the owner and an authorized Admin shall be able to open a detail screen and edit timer event timestamps.
+2. An Admin shall be able to view a current Member's completed entries but not edit or delete them.
+3. For a completed timer-generated entry, only the owner shall be able to edit timer event timestamps.
 4. They shall be able to add or remove `PAUSE` + `RESUME` event pairs. The `START` and `STOP` events are mandatory.
 5. Edited timer events shall remain chronologically ordered and form a valid event sequence. The system shall recalculate duration and revalidate the no-overlap and no-future-time rules.
-6. A Member cannot view or manage another Member's entries.
-7. The entry owner and an authorized Admin may reassign a completed entry to a different project and add or remove its tickets and tags. The entry owner must be assigned to the selected project; every ticket must belong to the entry's organization; and the normal no-overlap and no-future-time rules apply.
+6. A Member cannot view or manage another Member's entries. An Admin may use a read-only member selector on Tracker to see a current member's active timer, daily completed entries, and weekly totals. The default "Me" selection retains the Admin's own timer and entry controls.
+7. The entry owner may reassign a completed entry to a different project and add or remove its tickets and tags. The entry owner must be assigned to the selected project; every ticket must belong to the entry's organization; and the normal no-overlap and no-future-time rules apply.
 8. Deleting a completed time entry shall permanently remove the entry and its dependent timer events and tag links. Its audit record shall remain.
-9. The entry owner and an authorized Admin may edit a completed entry's task description, whether it originated from a manual entry or a timer.
+9. Only the entry owner may edit a completed entry's task description, whether it originated from a manual entry or a timer.
+10. The Manage entries page shall support server-side filtering by a day overlapping the entry in the selected member's timezone, project, and text search across descriptions, project names, ticket references/titles, and tags. Filters shall apply to pagination totals and results.
 
 ## 6. Reports and Exports
 
@@ -163,6 +169,8 @@ TimeTracker is an organization-based application for recording working time and 
 5. Changing an organization timezone shall not alter stored timestamps. Reports generated afterwards, including for historical data, shall use the current organization timezone; V1 does not retain timezone history.
 
 ## 8. Out of Scope for V1
+
+- Time-entry approval workflow (planned for the next version; Admins may approve Members' entries then)
 
 - Organization deletion
 - Account deletion and email-address changes

@@ -17,7 +17,13 @@ export type Ticket = {
   createdAt: string
 }
 export type TicketPage = { items: Ticket[]; total: number; limit: number; offset: number }
-export type Member = { id: string; email: string; name: string; role: 'ADMIN' | 'MEMBER' }
+export type Member = {
+  id: string
+  email: string
+  name: string
+  timezone: string
+  role: 'ADMIN' | 'MEMBER'
+}
 export type Invitation = { id: string; organizationName: string; expiresAt: string }
 export type SentInvitation = {
   id: string
@@ -30,6 +36,7 @@ export type ActiveTimer = {
   organizationId: string
   projectId: string
   ticketIds: string[]
+  ticketReferences: string[]
   description: string
   tagIds: string[]
   status: 'RUNNING' | 'PAUSED'
@@ -46,6 +53,10 @@ export type CompletedEntry = {
   sourceType: 'TIMER' | 'MANUAL'
   tags: string[]
 }
+export type TodayEntry = CompletedEntry & {
+  dayStartedAt: string
+  dayEndedAt: string
+}
 export type EntryTag = { id: string; name: string }
 export type EntryTicket = { id: string; reference: string; title: string }
 export type CompletedEntryItem = {
@@ -53,6 +64,7 @@ export type CompletedEntryItem = {
   organizationId: string
   userId: string
   userName: string
+  timezone: string
   projectId: string
   projectName: string
   tickets: EntryTicket[]
@@ -68,6 +80,7 @@ export type CompletedEntryPage = {
   total: number
   limit: number
   offset: number
+  timezone: string
 }
 export type CompletedEntryDetail = CompletedEntryItem & {
   events: { type: 'START' | 'PAUSE' | 'RESUME' | 'STOP'; occurredAt: string }[]

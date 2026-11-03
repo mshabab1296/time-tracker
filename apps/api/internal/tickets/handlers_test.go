@@ -15,6 +15,8 @@ func TestReadInputNormalizesAndValidates(t *testing.T) {
 		{"missing reference", `{"reference":"   ","title":"Investigate bug"}`, false},
 		{"missing title", `{"reference":"APP-17","title":"  "}`, false},
 		{"invalid JSON", `{`, false},
+		{"unknown field", `{"reference":"APP-17","title":"Investigate bug","unexpected":true}`, false},
+		{"multiple objects", `{"reference":"APP-17","title":"Investigate bug"} {}`, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -17,10 +17,37 @@ export function TeamPage() {
 
   return (
     <div className="split-layout">
-      <section className="card">
-        <h2>{isAdmin ? 'Members' : 'Your invitations'}</h2>
-        {isAdmin ? (
-          members.map((member) => (
+      {(incoming.length > 0 || !isAdmin) && (
+        <section className="card">
+          <h2>Your invitations</h2>
+          {incoming.length ? (
+            incoming.map((invitation) => (
+              <div className="member-row" key={invitation.id}>
+                <span>
+                  <strong>{invitation.organizationName}</strong>
+                  <small>Expires {new Date(invitation.expiresAt).toLocaleDateString()}</small>
+                </span>
+                <span className="row-actions">
+                  <button onClick={() => void decide(invitation, 'accept')}>Accept</button>
+                  <button className="secondary" onClick={() => void decide(invitation, 'decline')}>
+                    Decline
+                  </button>
+                </span>
+              </div>
+            ))
+          ) : (
+            <EmptyState
+              title="No invitations"
+              text="Organization invitations will appear here."
+              compact
+            />
+          )}
+        </section>
+      )}
+      {isAdmin && (
+        <section className="card">
+          <h2>Members</h2>
+          {members.map((member) => (
             <div className="member-row" key={member.id}>
               <span className="avatar small">{member.name.slice(0, 1).toUpperCase()}</span>
               <span>
@@ -35,30 +62,9 @@ export function TeamPage() {
                 </button>
               )}
             </div>
-          ))
-        ) : incoming.length ? (
-          incoming.map((invitation) => (
-            <div className="member-row" key={invitation.id}>
-              <span>
-                <strong>{invitation.organizationName}</strong>
-                <small>Expires {new Date(invitation.expiresAt).toLocaleDateString()}</small>
-              </span>
-              <span className="row-actions">
-                <button onClick={() => void decide(invitation, 'accept')}>Accept</button>
-                <button className="secondary" onClick={() => void decide(invitation, 'decline')}>
-                  Decline
-                </button>
-              </span>
-            </div>
-          ))
-        ) : (
-          <EmptyState
-            title="No invitations"
-            text="Organization invitations will appear here."
-            compact
-          />
-        )}
-      </section>
+          ))}
+        </section>
+      )}
       {isAdmin && (
         <section className="card">
           <h2>Invite people</h2>

@@ -21,6 +21,7 @@ type InvitationCreateHandler struct {
 type InvitationListHandler struct{ Database *pgxpool.Pool }
 type OrganizationInvitationListHandler struct{ Database *pgxpool.Pool }
 type InvitationDecisionHandler struct{ Database *pgxpool.Pool }
+type InvitationTokenAcceptHandler struct{ Database *pgxpool.Pool }
 type InvitationCancelHandler struct{ Database *pgxpool.Pool }
 type InvitationResendHandler struct {
 	Database   *pgxpool.Pool
@@ -29,6 +30,67 @@ type InvitationResendHandler struct {
 }
 type invitationRequest struct {
 	Email string `json:"email"`
+}
+type invitationTokenRequest struct {
+	Token string `json:"token"`
+}
+
+func (handler InvitationTokenAcceptHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	userID, ok := auth.AuthenticatedUserID(writer, request, handler.Database)
+	if !ok {
+		return
+	}
+	var input invitationTokenRequest
+	if !decodeJSON(writer, request, &input) {
+		return
+	}
+	if input.Token == "" {
+		respondError(writer, http.StatusBadRequest, "VALIDATION_ERROR", "An invitation token is required.")
+		return
+	}
+	tx, err := handler.Database.BeginTx(request.Context(), pgx.TxOptions{})
+	if err != nil {
+		respondError(writer, 500, "INTERNAL_ERROR", "Unable to accept invitation.")
+		return
+	}
+	defer tx.Rollback(request.Context())
+	var invitationID, organizationID uuid.UUID
+	var status string
+	err = tx.QueryRow(request.Context(), `SELECT i.id, i.organization_id, i.status FROM invitations i JOIN users u ON u.email = i.email WHERE i.token_hash = $1 AND u.id = $2 AND (i.status = 'ACCEPTED' OR (i.status = 'PENDING' AND i.expires_at > CURRENT_TIMESTAMP)) FOR UPDATE`, auth.HashActionToken(input.Token), userID).Scan(&invitationID, &organizationID, &status)
+	if err != nil {
+		respondError(writer, http.StatusBadRequest, "INVITATION_NOT_AVAILABLE", "The invitation link is invalid, expired, or belongs to another account.")
+		return
+	}
+	if status == "ACCEPTED" {
+		var member bool
+		err = tx.QueryRow(request.Context(), `SELECT EXISTS(SELECT 1 FROM memberships WHERE organization_id = $1 AND user_id = $2)`, organizationID, userID).Scan(&member)
+		if err != nil || !member {
+			respondError(writer, http.StatusBadRequest, "INVITATION_NOT_AVAILABLE", "This invitation is no longer available.")
+			return
+		}
+	} else {
+		membershipID, idErr := uuid.NewV7()
+		if idErr != nil {
+			respondError(writer, 500, "INTERNAL_ERROR", "Unable to accept invitation.")
+			return
+		}
+		_, err = tx.Exec(request.Context(), `INSERT INTO memberships (id, organization_id, user_id, role) VALUES ($1, $2, $3, 'MEMBER') ON CONFLICT (organization_id, user_id) DO NOTHING`, membershipID, organizationID, userID)
+		if err == nil {
+			_, err = tx.Exec(request.Context(), `UPDATE invitations SET status = 'ACCEPTED', responded_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, invitationID)
+		}
+		if err != nil {
+			respondError(writer, 500, "INTERNAL_ERROR", "Unable to accept invitation.")
+			return
+		}
+	}
+	if err = tx.Commit(request.Context()); err != nil {
+		respondError(writer, 500, "INTERNAL_ERROR", "Unable to accept invitation.")
+		return
+	}
+	if status != "ACCEPTED" {
+		audit(request, handler.Database, organizationID, userID, "INVITATION_ACCEPTED", "INVITATION", invitationID)
+	}
+	respond(writer, http.StatusOK, map[string]any{"status": "ACCEPTED", "organizationId": organizationID})
 }
 
 func (handler InvitationCreateHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -194,8 +256,12 @@ func (handler InvitationDecisionHandler) ServeHTTP(writer http.ResponseWriter, r
 		respondError(writer, 500, "INTERNAL_ERROR", "Unable to update invitation.")
 		return
 	}
-	audit(request, handler.Database, organizationID, userID, "INVITATION_"+strings.ToUpper(decision)+"ED", "INVITATION", invitationID)
-	respond(writer, http.StatusOK, map[string]any{"status": strings.ToUpper(decision) + "ED", "organizationId": organizationID})
+	status := "ACCEPTED"
+	if decision == "decline" {
+		status = "DECLINED"
+	}
+	audit(request, handler.Database, organizationID, userID, "INVITATION_"+status, "INVITATION", invitationID)
+	respond(writer, http.StatusOK, map[string]any{"status": status, "organizationId": organizationID})
 }
 
 func (handler InvitationCancelHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -282,6 +348,6 @@ func refreshInvitation(writer http.ResponseWriter, request *http.Request, databa
 	return invitation{id: invitationID, organizationID: organizationID, email: email, organizationName: organizationName, expiresAt: expiresAt}, token, true
 }
 func sendInvitation(sender platformemail.Sender, webBaseURL, email, organizationName, token string) error {
-	url := strings.TrimRight(webBaseURL, "/") + "/?invitationToken=" + token
-	return sender.Send(email, "Invitation to "+organizationName+" on TimeTracker", "You have been invited to "+organizationName+". Sign up or log in with this email address, then accept the invitation in TimeTracker.\n\n"+url+"\n\nThis link expires in seven days.")
+	url := strings.TrimRight(webBaseURL, "/") + "/invite?token=" + token
+	return sender.Send(email, "Invitation to "+organizationName+" on TimeTracker", "You have been invited to "+organizationName+". Open this link and sign up or log in with this email address to join the organization.\n\n"+url+"\n\nThis link expires in seven days.")
 }

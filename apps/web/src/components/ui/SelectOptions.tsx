@@ -18,11 +18,19 @@ export function SelectOptions({
   emptyMessage?: string
 }) {
   return (
-    <div className="select-options" id={id} role="listbox" aria-label={label}>
+    <div
+      className="select-options"
+      id={id}
+      role="listbox"
+      aria-label={label}
+      aria-multiselectable={Array.isArray(value) || undefined}
+    >
       {options.length ? (
         options.map((option, index) => (
           <button
             key={option.value}
+            id={`${id}-option-${index}`}
+            tabIndex={-1}
             type="button"
             role="option"
             aria-selected={

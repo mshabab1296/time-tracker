@@ -200,6 +200,14 @@ func TestAdminTrackerViewIsReadOnly(t *testing.T) {
 	if len(entries) != 1 || entries[0].ID != entry.ID {
 		t.Fatalf("admin tracker entries=%+v", entries)
 	}
+	allEntries := decodeData[struct {
+		Items []struct{ ID uuid.UUID }
+		Total int
+	}](t, f.call(t, handler.ListCompleted, 0, "GET", "/entries?organizationId="+f.org.String()+"&userId=all", nil, nil, 200))
+	if allEntries.Total != 1 || len(allEntries.Items) != 1 || allEntries.Items[0].ID != entry.ID {
+		t.Fatalf("admin all-member entries=%+v", allEntries)
+	}
+	f.call(t, handler.ListCompleted, 1, "GET", "/entries?organizationId="+f.org.String()+"&userId=all", nil, nil, 403)
 	f.call(t, handler.WeekSummary, 0, "GET", base+"&date="+start.Format("2006-01-02"), nil, nil, 200)
 	active := decodeData[struct{ ID uuid.UUID }](t, f.call(t, handler.Start, 1, "POST", "/timer/start", map[string]any{
 		"organizationId": f.org, "projectId": f.project, "description": "Live member work", "tagIds": []string{},
@@ -210,7 +218,7 @@ func TestAdminTrackerViewIsReadOnly(t *testing.T) {
 	}
 	f.call(t, handler.Stop, 0, "POST", "/timer/stop", map[string]any{"entryId": active.ID}, nil, 404)
 	f.call(t, handler.Stop, 1, "POST", "/timer/stop", map[string]any{"entryId": active.ID}, nil, 200)
-	f.call(t, handler.UpdateTimerEvents, 0, "PATCH", "/entries?organizationId="+f.org.String(), map[string]any{
+	f.call(t, handler.UpdateTimerEvents, 0, "PUT", "/entries?organizationId="+f.org.String(), map[string]any{
 		"events": []map[string]any{{"type": "START", "occurredAt": start}, {"type": "STOP", "occurredAt": start.Add(time.Minute)}},
 	}, map[string]string{"entryID": active.ID.String()}, 403)
 	f.call(t, handler.TodayEntries, 2, "GET", base, nil, nil, 403)

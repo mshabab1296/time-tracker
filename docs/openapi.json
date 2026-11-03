@@ -4894,10 +4894,17 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "format": "uuid"
+              "oneOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "const": "all"
+                }
+              ]
             },
-            "description": "Admin-only member selection."
+            "description": "Select a member by UUID, or use all for an Admin-only organization-wide list. Omit for your own entries."
           },
           {
             "name": "date",
@@ -4907,7 +4914,7 @@
               "type": "string",
               "format": "date"
             },
-            "description": "Include entries overlapping this date in the selected member's timezone."
+            "description": "Include entries overlapping this date in each selected member's timezone."
           },
           {
             "name": "projectId",
@@ -6727,6 +6734,7 @@
           "organizationId",
           "userId",
           "userName",
+          "timezone",
           "projectId",
           "projectName",
           "description",
@@ -6752,6 +6760,10 @@
           },
           "userName": {
             "type": "string"
+          },
+          "timezone": {
+            "type": "string",
+            "description": "IANA timezone of the entry owner, used for member-local date display and filtering."
           },
           "projectId": {
             "type": "string",
@@ -6804,6 +6816,7 @@
           "organizationId",
           "userId",
           "userName",
+          "timezone",
           "projectId",
           "projectName",
           "description",
@@ -6830,6 +6843,10 @@
           },
           "userName": {
             "type": "string"
+          },
+          "timezone": {
+            "type": "string",
+            "description": "IANA timezone of the entry owner."
           },
           "projectId": {
             "type": "string",
@@ -6971,7 +6988,8 @@
           "items",
           "total",
           "limit",
-          "offset"
+          "offset",
+          "timezone"
         ],
         "properties": {
           "items": {
@@ -6991,6 +7009,10 @@
           "offset": {
             "type": "integer",
             "minimum": 0
+          },
+          "timezone": {
+            "type": "string",
+            "description": "Selected member's IANA timezone, or an empty string for the all-members view; each item carries its own timezone."
           }
         },
         "additionalProperties": false

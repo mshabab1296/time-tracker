@@ -88,8 +88,16 @@ func assertIntegrationContract(t *testing.T, action http.HandlerFunc, method str
 		path = "/api/v1/organizations/{organizationID}/tickets/{ticketID}"
 	case "CreateManual":
 		path = "/api/v1/time-entries/manual"
+	case "TodayEntries":
+		path = "/api/v1/time-entries/today"
+	case "WeekSummary":
+		path = "/api/v1/time-entries/week-summary"
+	case "ListCompleted":
+		path = "/api/v1/time-entries"
 	case "CompletedDetail", "UpdateCompleted", "DeleteCompleted":
 		path = "/api/v1/time-entries/{entryID}"
+	case "UpdateTimerEvents":
+		path = "/api/v1/time-entries/{entryID}/events"
 	case "Entries":
 		path = "/api/v1/reports/entries"
 	case "Summary":
